@@ -68,6 +68,18 @@ If a config defines a command name, that command replaces `/pc` in the Telegram 
 
 See `examples/paperclip-cockpit.example.json` for a generic placeholder config. The plugin itself should not contain project-specific nouns, scripts, or prompts.
 
+Optional gateway behavior:
+
+```json
+{
+  "gateway": {
+    "reset_on_gateway_shutdown": true
+  }
+}
+```
+
+When enabled, the plugin resets Hermes gateway sessions that Hermes marked as `resume_pending` after an interrupted gateway shutdown. This is useful for command-cockpit profiles where a fresh Telegram turn is safer than automatic continuation.
+
 Company selection order:
 
 1. `--company "Company Name"` in a command.

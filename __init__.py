@@ -14,7 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -88,6 +88,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
 def _env_csv(name: str) -> set[str]:
     raw = os.environ.get(name, "")
     return {item.strip().casefold() for item in raw.split(",") if item.strip()}
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() in {"1", "true", "yes", "y", "on"}
 
 
 def _writes_enabled() -> bool:
@@ -214,10 +222,38 @@ def _config() -> dict[str, Any]:
         "aliases": DEFAULT_ALIASES,
         "markers": DEFAULT_MARKERS,
         "actions": {},
+        "gateway": {},
     }
     for path in _config_paths():
         config = _merge_dict(config, _read_json(path))
     return config
+
+
+def _gateway_config() -> dict[str, Any]:
+    config = _config().get("gateway", {})
+    return config if isinstance(config, dict) else {}
+
+
+def _reset_on_gateway_shutdown_enabled() -> bool:
+    env_value = os.environ.get("PAPERCLIP_COCKPIT_RESET_ON_GATEWAY_SHUTDOWN")
+    if env_value is not None:
+        return _env_bool("PAPERCLIP_COCKPIT_RESET_ON_GATEWAY_SHUTDOWN", False)
+
+    gateway = _gateway_config()
+    for key in ("reset_on_gateway_shutdown", "reset_on_shutdown_interruption", "reset_interrupted_context"):
+        if key in gateway:
+            return _as_bool(gateway.get(key), False)
+    return False
+
+
+def _reset_on_gateway_shutdown_reasons() -> set[str]:
+    gateway = _gateway_config()
+    reasons = (
+        gateway.get("reset_resume_reasons")
+        or gateway.get("reset_on_gateway_shutdown_reasons")
+        or gateway.get("reset_interrupted_reasons")
+    )
+    return {item.strip().casefold() for item in _listify(reasons) if item.strip()}
 
 
 def _sanitize_command_name(value: str) -> str:
@@ -594,6 +630,7 @@ def _capabilities_cmd(_: str) -> str:
         f"- natural_language_rewrite: {_env_bool('PAPERCLIP_COCKPIT_NL_REWRITE', True)}",
         f"- slash_command_writes: {_writes_enabled()}",
         f"- natural_language_writes: {_nl_writes_enabled()}",
+        f"- reset_on_gateway_shutdown: {_reset_on_gateway_shutdown_enabled()}",
         f"- explicit_commands_registered: {_env_bool('PAPERCLIP_COCKPIT_REGISTER_EXPLICIT', False)}",
         f"- project_actions: {', '.join(_actions().keys()) or '-'}",
     ]
@@ -807,9 +844,69 @@ def _event_allowed(event: Any) -> bool:
     return True
 
 
-def _pre_gateway_dispatch(event: Any, **_: Any) -> dict[str, str] | None:
+def _maybe_reset_gateway_shutdown_context(event: Any, gateway: Any = None, session_store: Any = None) -> bool:
+    if not _reset_on_gateway_shutdown_enabled():
+        return False
+
+    source = getattr(event, "source", None)
+    if source is None:
+        return False
+
+    store = session_store or getattr(gateway, "session_store", None)
+    if store is None:
+        return False
+
+    session_key = ""
+    try:
+        if gateway is not None and hasattr(gateway, "_session_key_for_source"):
+            session_key = str(gateway._session_key_for_source(source) or "")
+        elif hasattr(store, "_generate_session_key"):
+            session_key = str(store._generate_session_key(source) or "")
+    except Exception as exc:
+        logger.debug("Paperclip Cockpit could not resolve gateway session key: %s", exc)
+        return False
+
+    if not session_key:
+        return False
+
+    try:
+        ensure_loaded = getattr(store, "_ensure_loaded", None)
+        if callable(ensure_loaded):
+            ensure_loaded()
+        entries = getattr(store, "_entries", {}) or {}
+        entry = entries.get(session_key)
+        if entry is None or not bool(getattr(entry, "resume_pending", False)):
+            return False
+
+        reason = str(getattr(entry, "resume_reason", "") or "").casefold()
+        allowed_reasons = _reset_on_gateway_shutdown_reasons()
+        if allowed_reasons and reason not in allowed_reasons:
+            return False
+
+        reset_session = getattr(store, "reset_session", None)
+        if not callable(reset_session):
+            return False
+
+        reset_session(session_key)
+        logger.info(
+            "Paperclip Cockpit reset Hermes gateway session %s after interrupted gateway shutdown (reason=%s)",
+            session_key,
+            reason or "unknown",
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Paperclip Cockpit failed to reset interrupted gateway context: %s", exc)
+        return False
+
+
+def _pre_gateway_dispatch(event: Any, **kwargs: Any) -> dict[str, str] | None:
     if not _event_allowed(event):
         return None
+    _maybe_reset_gateway_shutdown_context(
+        event,
+        gateway=kwargs.get("gateway"),
+        session_store=kwargs.get("session_store"),
+    )
     rewritten = _rewrite_text(getattr(event, "text", "") or "")
     if not rewritten:
         return None

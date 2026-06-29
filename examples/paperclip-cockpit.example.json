@@ -4,6 +4,9 @@
     "description": "Project-specific Paperclip cockpit.",
     "register_pc_fallback": false
   },
+  "gateway": {
+    "reset_on_gateway_shutdown": false
+  },
   "company_hints": ["Example Workspace"],
   "labels": {
     "company": "workspace",

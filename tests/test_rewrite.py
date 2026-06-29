@@ -3,6 +3,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -60,6 +61,74 @@ class RewriteTests(unittest.TestCase):
             os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
             self.assertEqual(paperclip_cockpit._rewrite_text("team roster"), "/work members")
             self.assertEqual(paperclip_cockpit._slash(), "/work")
+
+    def test_gateway_shutdown_reset_when_enabled(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write('{"gateway":{"reset_on_gateway_shutdown":true}}')
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+
+            session_key = "agent:main:telegram:dm:1"
+
+            class Store:
+                def __init__(self):
+                    self._entries = {
+                        session_key: SimpleNamespace(
+                            resume_pending=True,
+                            resume_reason="shutdown_timeout",
+                        )
+                    }
+                    self.reset_calls = []
+
+                def _ensure_loaded(self):
+                    return None
+
+                def reset_session(self, key):
+                    self.reset_calls.append(key)
+                    self._entries[key].resume_pending = False
+                    return SimpleNamespace(session_id="fresh")
+
+            store = Store()
+            gateway = SimpleNamespace(
+                session_store=store,
+                _session_key_for_source=lambda source: session_key,
+            )
+            event = SimpleNamespace(
+                text="show paperclip companies",
+                source=SimpleNamespace(
+                    platform=SimpleNamespace(value="telegram"),
+                    chat_id="1",
+                ),
+            )
+
+            self.assertTrue(paperclip_cockpit._maybe_reset_gateway_shutdown_context(event, gateway=gateway))
+            self.assertEqual(store.reset_calls, [session_key])
+
+    def test_gateway_shutdown_reset_disabled_by_default(self):
+        session_key = "agent:main:telegram:dm:1"
+        store = SimpleNamespace(
+            _entries={
+                session_key: SimpleNamespace(
+                    resume_pending=True,
+                    resume_reason="shutdown_timeout",
+                )
+            },
+            _ensure_loaded=lambda: None,
+            reset_session=lambda key: (_ for _ in ()).throw(AssertionError("should not reset")),
+        )
+        gateway = SimpleNamespace(
+            session_store=store,
+            _session_key_for_source=lambda source: session_key,
+        )
+        event = SimpleNamespace(
+            text="show paperclip companies",
+            source=SimpleNamespace(
+                platform=SimpleNamespace(value="telegram"),
+                chat_id="1",
+            ),
+        )
+
+        self.assertFalse(paperclip_cockpit._maybe_reset_gateway_shutdown_context(event, gateway=gateway))
 
 
 if __name__ == "__main__":
