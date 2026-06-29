@@ -4,21 +4,23 @@ Use this note when Hermes has the `paperclip-cockpit` plugin installed and the u
 
 ## Operating Rule
 
-Prefer deterministic `/pc` commands over memory or speculation. Paperclip state changes quickly, so ask the plugin for current state instead of guessing.
+Prefer deterministic Paperclip Cockpit commands over memory or speculation. Paperclip state changes quickly, so ask the plugin for current state instead of guessing.
+
+The command name is configurable. Use `/pc` only when no project config changes it. If the project config defines a command such as `/work`, `/lab`, or another project word, use that command instead.
 
 ## Read Commands
 
-- Use `/pc companies` to list organizations.
-- Use `/pc health` to check the Paperclip API.
-- Use `/pc agents [--company "Name"]` to list workers/agents in a company.
-- Use `/pc tasks [--company "Name"] [open|all|todo|in_progress|blocked|done|cancelled] [limit]` to inspect work.
-- Use `/pc task ISSUE` for one issue.
-- Use `/pc comments ISSUE` for recent discussion.
-- Use `/pc capabilities` to see plugin configuration and safety mode.
+- Use `<command> companies` to list organizations.
+- Use `<command> health` to check the Paperclip API.
+- Use `<command> agents [--company "Name"]` to list workers/agents in a company.
+- Use `<command> tasks [--company "Name"] [open|all|todo|in_progress|blocked|done|cancelled] [limit]` to inspect work.
+- Use `<command> task ISSUE` for one issue.
+- Use `<command> comments ISSUE` for recent discussion.
+- Use `<command> capabilities` to see plugin configuration and safety mode.
 
 ## Write Commands
 
-Only use `/pc move ISSUE STATUS` when the user explicitly asks to change Paperclip state. Do not infer a write from vague discussion.
+Only use `<command> move ISSUE STATUS` when the user explicitly asks to change Paperclip state. Do not infer a write from vague discussion.
 
 Valid statuses:
 
@@ -41,4 +43,4 @@ When answering the user:
 
 ## Telegram Behavior
 
-The plugin can rewrite simple user messages into `/pc` commands before the LLM runs. Treat those results as tool output, not as conversation memory.
+The plugin can rewrite simple user messages into the configured command before the LLM runs. Treat those results as tool output, not as conversation memory.

@@ -10,7 +10,7 @@ This is complementary to [NousResearch/hermes-paperclip-adapter](https://github.
 
 ## What It Does
 
-- Adds one visible Hermes command: `/pc`.
+- Adds one visible Hermes command. Default: `/pc`; configurable per project.
 - Lists Paperclip companies, agents, tasks, task details, and comments.
 - Can move an issue between Paperclip statuses when writes are explicitly enabled.
 - Can rewrite simple natural-language Telegram messages into `/pc ...` commands before the LLM is called.
@@ -38,8 +38,8 @@ hermes plugins install 4crimson/hermes-paperclip-cockpit --enable
 For local development:
 
 ```bash
-./scripts/install-local.sh inneragora
-inneragora plugins enable paperclip-cockpit
+./scripts/install-local.sh myprofile
+myprofile plugins enable paperclip-cockpit
 ```
 
 The script copies this plugin into `~/.hermes/profiles/<profile>/plugins/paperclip-cockpit`.
@@ -49,7 +49,7 @@ The script copies this plugin into `~/.hermes/profiles/<profile>/plugins/papercl
 ```bash
 PAPERCLIP_API_BASE=http://127.0.0.1:3100/api
 PAPERCLIP_PUBLIC_BASE=http://127.0.0.1:3100
-PAPERCLIP_DEFAULT_COMPANY="The Inner Agora"
+PAPERCLIP_DEFAULT_COMPANY="Example Workspace"
 
 # Optional:
 PAPERCLIP_COCKPIT_ENABLE_WRITES=0
@@ -60,11 +60,19 @@ PAPERCLIP_COCKPIT_ALLOWED_PLATFORMS=telegram
 PAPERCLIP_COCKPIT_ALLOWED_CHATS=
 ```
 
+## Project Config
+
+Put `paperclip-cockpit.json` in the Hermes profile directory or in the profile `terminal.cwd`.
+
+If a config defines a command name, that command replaces `/pc` in the Telegram menu. For example, `"name": "work"` registers `/work`, not `/pc`.
+
+See `examples/paperclip-cockpit.example.json` for a generic placeholder config. The plugin itself should not contain project-specific nouns, scripts, or prompts.
+
 Company selection order:
 
 1. `--company "Company Name"` in a command.
-2. `PAPERCLIP_DEFAULT_COMPANY` or `PAPERCLIP_COMPANY_NAME`.
-3. Compatibility variables such as `INNER_AGORA_COMPANY_NAME` or `AI_BOARD_COMPANY_NAME`.
+2. `company_hints` in `paperclip-cockpit.json`.
+3. `PAPERCLIP_DEFAULT_COMPANY` or `PAPERCLIP_COMPANY_NAME`.
 4. The basename of `terminal.cwd` from the Hermes profile config.
 5. The Hermes profile directory name.
 
@@ -99,9 +107,9 @@ When `PAPERCLIP_COCKPIT_PRE_GATEWAY=1`, the plugin can rewrite simple messages b
 ```text
 show paperclip companies      -> /pc companies
 покажи задачи                 -> /pc tasks
-список философов в перклипе   -> /pc agents
-что по THE-9                  -> /pc task THE-9
-комменты THE-9                -> /pc comments THE-9
+who is in paperclip           -> /pc agents
+what about ABC-9              -> /pc task ABC-9
+comments ABC-9                -> /pc comments ABC-9
 ```
 
 Write rewrites are disabled by default. To allow phrases like `move THE-9 done`, set both:
@@ -115,9 +123,11 @@ PAPERCLIP_COCKPIT_NL_WRITES=1
 
 Copy or reference `skills/paperclip-control/SKILL.md` from your Hermes assistant profile. It tells the model:
 
-- Paperclip facts should come from `/pc`, not memory.
+- Paperclip facts should come from the configured command, not memory.
 - Writes require explicit user intent.
 - Replies should label Paperclip API facts separately from inference.
+
+Project-specific wording belongs in `paperclip-cockpit.json`, not in the plugin.
 
 ## Development
 

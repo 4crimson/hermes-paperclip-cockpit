@@ -1,0 +1,44 @@
+{
+  "command": {
+    "name": "work",
+    "description": "Project-specific Paperclip cockpit.",
+    "register_pc_fallback": false
+  },
+  "company_hints": ["Example Workspace"],
+  "labels": {
+    "company": "workspace",
+    "companies": "workspaces",
+    "agent": "member",
+    "agents": "members",
+    "task": "item",
+    "tasks": "items",
+    "comment": "note",
+    "comments": "notes"
+  },
+  "terms": {
+    "companies": "workspaces",
+    "agents": "members",
+    "tasks": "items",
+    "task": "item",
+    "comments": "notes",
+    "move": "move",
+    "health": "health",
+    "capabilities": "capabilities"
+  },
+  "aliases": {
+    "agents": ["members", "team", "people"],
+    "tasks": ["items", "queue", "work"],
+    "task": ["item"],
+    "comments": ["notes"]
+  },
+  "markers": ["paperclip", "work"],
+  "actions": {
+    "sample": {
+      "usage": "sample ARG",
+      "aliases": ["demo"],
+      "natural_aliases": ["run sample"],
+      "exec": ["./scripts/project-action", "sample"],
+      "timeout": 120
+    }
+  }
+}
