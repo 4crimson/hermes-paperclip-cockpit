@@ -14,7 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -222,6 +222,7 @@ def _config() -> dict[str, Any]:
         "aliases": DEFAULT_ALIASES,
         "markers": DEFAULT_MARKERS,
         "actions": {},
+        "intents": {},
         "gateway": {},
     }
     for path in _config_paths():
@@ -454,6 +455,22 @@ def _actions() -> dict[str, dict[str, Any]]:
     if not isinstance(raw, dict):
         return {}
     return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
+
+
+def _intents() -> list[dict[str, Any]]:
+    raw = _config().get("intents", {})
+    items: list[dict[str, Any]] = []
+    if isinstance(raw, dict):
+        for name, value in raw.items():
+            if isinstance(value, dict):
+                item = dict(value)
+                item.setdefault("name", str(name))
+                items.append(item)
+    elif isinstance(raw, list):
+        for value in raw:
+            if isinstance(value, dict):
+                items.append(dict(value))
+    return items
 
 
 def _action_aliases(name: str, action: dict[str, Any]) -> set[str]:
@@ -828,6 +845,54 @@ def _rewrite_action(raw: str, lowered: str) -> str | None:
     return None
 
 
+def _rewrite_intent(raw: str, lowered: str) -> str | None:
+    actions = _actions()
+    for intent in _intents():
+        action_name = str(intent.get("action") or intent.get("target") or "").strip()
+        if not action_name or action_name not in actions:
+            continue
+        aliases = _listify(intent.get("aliases") or intent.get("natural_aliases") or intent.get("phrases"))
+        if not aliases:
+            continue
+        match_mode = str(intent.get("match") or intent.get("mode") or "prefix").strip().casefold()
+        min_tail_chars = int(intent.get("min_tail_chars") or intent.get("minimum_tail_chars") or 0)
+        require_tail = _as_bool(intent.get("require_tail"), False)
+        preserve_full_text = _as_bool(intent.get("preserve_full_text"), False)
+
+        for alias in aliases:
+            alias_text = alias.strip().casefold()
+            if not alias_text:
+                continue
+
+            tail = ""
+            matched = False
+            if match_mode == "contains":
+                index = lowered.find(alias_text)
+                if index >= 0:
+                    matched = True
+                    tail = raw if preserve_full_text else raw[index + len(alias_text) :].strip(" :-\t")
+            else:
+                if lowered == alias_text:
+                    matched = True
+                    tail = ""
+                else:
+                    for separator in (":", " - ", " "):
+                        prefix = f"{alias_text}{separator}"
+                        if lowered.startswith(prefix):
+                            matched = True
+                            tail = raw[len(alias_text + separator) :].strip()
+                            break
+
+            if not matched:
+                continue
+            if require_tail and not tail:
+                continue
+            if min_tail_chars and len(tail) < min_tail_chars:
+                continue
+            return _slash(action_name, tail)
+    return None
+
+
 def _rewrite_text(text: str) -> str | None:
     if not _env_bool("PAPERCLIP_COCKPIT_NL_REWRITE", True):
         return None
@@ -845,6 +910,10 @@ def _rewrite_text(text: str) -> str | None:
     action_rewrite = _rewrite_action(raw, lowered)
     if action_rewrite:
         return action_rewrite
+
+    intent_rewrite = _rewrite_intent(raw, lowered)
+    if intent_rewrite:
+        return intent_rewrite
 
     issue_match = ISSUE_RE.search(raw)
     issue_ref = issue_match.group(1).upper() if issue_match else ""

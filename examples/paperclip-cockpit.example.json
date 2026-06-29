@@ -43,5 +43,13 @@
       "exec": ["./scripts/project-action", "sample"],
       "timeout": 120
     }
+  },
+  "intents": {
+    "create_sample": {
+      "action": "sample",
+      "aliases": ["create sample task", "start sample research"],
+      "require_tail": true,
+      "min_tail_chars": 10
+    }
   }
 }

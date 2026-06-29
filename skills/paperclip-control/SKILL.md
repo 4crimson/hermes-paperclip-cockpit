@@ -32,6 +32,12 @@ Valid statuses:
 
 The plugin may reject writes unless `PAPERCLIP_COCKPIT_ENABLE_WRITES=1` is set.
 
+## Project Actions
+
+Project configs may define extra actions such as `research`, `prepare`, `brief`, or `run`. If the user asks to start/create/run project work and the config exposes a matching command, use that command instead of improvising with local files or code.
+
+When the user confirms a previously discussed plan, reuse the concrete entities from the visible conversation and call the configured project action with an explicit argument list. If the confirmation is too vague to identify the work, ask one short clarification.
+
 ## Reporting Style
 
 When answering the user:

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import pathlib
 import tempfile
@@ -61,6 +62,35 @@ class RewriteTests(unittest.TestCase):
             os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
             self.assertEqual(paperclip_cockpit._rewrite_text("team roster"), "/work members")
             self.assertEqual(paperclip_cockpit._slash(), "/work")
+
+    def test_intent_rewrites_to_project_action(self):
+        body = {
+            "command": {"name": "lab"},
+            "actions": {
+                "research": {
+                    "exec": ["./scripts/research"],
+                    "usage": "research QUESTION",
+                }
+            },
+            "intents": {
+                "create_research": {
+                    "action": "research",
+                    "aliases": ["start research", "запусти исследование"],
+                    "require_tail": True,
+                    "min_tail_chars": 10,
+                }
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            self.assertEqual(
+                paperclip_cockpit._rewrite_text("запусти исследование: время в восточной философии"),
+                "/lab research время в восточной философии",
+            )
+            self.assertIsNone(paperclip_cockpit._rewrite_text("запусти исследование"))
+            self.assertIsNone(paperclip_cockpit._rewrite_text("запусти исследование: ок"))
 
     def test_extract_agent_tag_options(self):
         remaining, options = paperclip_cockpit._extract_agent_options(["--tag", "ethics", "The", "Agora"])
