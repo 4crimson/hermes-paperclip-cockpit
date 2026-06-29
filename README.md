@@ -164,6 +164,7 @@ Copy or reference `skills/paperclip-control/SKILL.md` from your Hermes assistant
 - Paperclip facts should come from the configured command, not memory.
 - Writes require explicit user intent.
 - Replies should label Paperclip API facts separately from inference.
+- Durable work needs a real Paperclip issue/run/automation identifier; local notes, `delegate_task`, and `execute_code` are not a substitute for trackable Paperclip state.
 
 Project-specific wording belongs in `paperclip-cockpit.json`, not in the plugin.
 

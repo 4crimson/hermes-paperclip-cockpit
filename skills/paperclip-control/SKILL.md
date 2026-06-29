@@ -38,6 +38,14 @@ Project configs may define extra actions such as `research`, `prepare`, `brief`,
 
 When the user confirms a previously discussed plan, reuse the concrete entities from the visible conversation and call the configured project action with an explicit argument list. If the confirmation is too vague to identify the work, ask one short clarification.
 
+## Durable Work And Truthfulness
+
+Paperclip state means Paperclip API objects: companies, agents, issues/tasks, runs, comments, and their identifiers. Local markdown files, repo notes, and temporary scripts are not Paperclip state unless the project action explicitly imports them.
+
+Do not claim that background agents, researchers, web research, or a future notification are active unless a durable Paperclip issue/run/automation was created or observed and you can name it. If a local file is a stub, say it is a local stub. If web tools are unavailable or did not run successfully, say that plainly.
+
+For long-running or interrupt-prone work, prefer a configured project action that creates durable Paperclip work. Do not substitute `delegate_task`, `execute_code`, or ad-hoc local reads when the user asked to create/start/track work in Paperclip.
+
 ## Reporting Style
 
 When answering the user:

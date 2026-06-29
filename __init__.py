@@ -14,7 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
