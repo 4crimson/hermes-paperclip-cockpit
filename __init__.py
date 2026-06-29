@@ -14,7 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -389,6 +389,37 @@ def _extract_company(words: list[str]) -> tuple[list[str], str]:
     return remaining, company
 
 
+def _agent_tags(agent: dict[str, Any]) -> list[str]:
+    metadata = agent.get("metadata")
+    tags = metadata.get("tags") if isinstance(metadata, dict) else []
+    if isinstance(tags, list):
+        return [str(tag).strip() for tag in tags if str(tag).strip()]
+    return []
+
+
+def _extract_agent_options(words: list[str]) -> tuple[list[str], dict[str, Any]]:
+    remaining: list[str] = []
+    options: dict[str, Any] = {"tag": "", "show_tags": False}
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word in {"--tags", "tags"}:
+            options["show_tags"] = True
+            index += 1
+            continue
+        if word == "--tag" and index + 1 < len(words):
+            options["tag"] = words[index + 1].strip().casefold()
+            index += 2
+            continue
+        if word.startswith("--tag="):
+            options["tag"] = word.split("=", 1)[1].strip().casefold()
+            index += 1
+            continue
+        remaining.append(word)
+        index += 1
+    return remaining, options
+
+
 def _agent_name(agent_by_id: dict[str, dict[str, Any]], agent_id: str | None) -> str:
     if not agent_id:
         return "-"
@@ -445,7 +476,7 @@ def _help(_: str = "") -> str:
         f"{command} help",
         f"{command} {_term('companies')}",
         f"{command} {_term('health')}",
-        f"{command} {_term('agents')} [--company NAME]",
+        f"{command} {_term('agents')} [--company NAME] [--tags|--tag TAG]",
         f"{command} {_term('tasks')} [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]",
         f"{command} {_term('task')} ISSUE",
         f"{command} {_term('comments')} ISSUE",
@@ -487,16 +518,37 @@ def _companies_cmd(_: str) -> str:
 
 def _agents_cmd(raw_args: str) -> str:
     words, company_token = _extract_company(_parse_words(raw_args))
+    words, options = _extract_agent_options(words)
     if words and not company_token:
         company_token = " ".join(words)
     company = _resolve_company(company_token)
     agents = _api(f"/companies/{company['id']}/agents")
+
+    if options["show_tags"]:
+        counts: dict[str, int] = {}
+        for agent in agents:
+            for tag in _agent_tags(agent):
+                counts[tag] = counts.get(tag, 0) + 1
+        lines = [f"# Paperclip {_label('agent')} tags: {company['name']}"]
+        for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold())):
+            lines.append(f"- {tag}: {count}")
+        lines.append(f"\nTotal tags: {len(counts)}")
+        return "\n".join(lines)
+
+    tag_filter = str(options["tag"] or "")
+    if tag_filter:
+        agents = [agent for agent in agents if tag_filter in {tag.casefold() for tag in _agent_tags(agent)}]
+
     lines = [f"# Paperclip {_label('agents')}: {company['name']}"]
     for agent in sorted(agents, key=lambda item: str(item.get("name", "")).casefold()):
         status = agent.get("status") or "unknown"
         adapter = agent.get("adapterType") or "-"
         role = agent.get("role") or "-"
-        lines.append(f"- {status:<12} {agent.get('name')} role={role} adapter={adapter}")
+        tags = _agent_tags(agent)
+        tag_text = f" tags={', '.join(tags)}" if tags else ""
+        lines.append(f"- {status:<12} {agent.get('name')} role={role} adapter={adapter}{tag_text}")
+    if tag_filter:
+        lines.append(f"\nFilter tag: {tag_filter}")
     lines.append(f"\nTotal: {len(agents)}")
     return "\n".join(lines)
 

@@ -62,6 +62,22 @@ class RewriteTests(unittest.TestCase):
             self.assertEqual(paperclip_cockpit._rewrite_text("team roster"), "/work members")
             self.assertEqual(paperclip_cockpit._slash(), "/work")
 
+    def test_extract_agent_tag_options(self):
+        remaining, options = paperclip_cockpit._extract_agent_options(["--tag", "ethics", "The", "Agora"])
+        self.assertEqual(remaining, ["The", "Agora"])
+        self.assertEqual(options["tag"], "ethics")
+        self.assertFalse(options["show_tags"])
+
+        remaining, options = paperclip_cockpit._extract_agent_options(["--tags"])
+        self.assertEqual(remaining, [])
+        self.assertTrue(options["show_tags"])
+
+    def test_agent_tags_from_metadata(self):
+        self.assertEqual(
+            paperclip_cockpit._agent_tags({"metadata": {"tags": ["ethics", "", " politics "]}}),
+            ["ethics", "politics"],
+        )
+
     def test_gateway_shutdown_reset_when_enabled(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
             config.write('{"gateway":{"reset_on_gateway_shutdown":true}}')

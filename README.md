@@ -94,7 +94,7 @@ Company selection order:
 /pc help
 /pc companies
 /pc health
-/pc agents [--company NAME]
+/pc agents [--company NAME] [--tags|--tag TAG]
 /pc tasks [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]
 /pc task ISSUE
 /pc comments ISSUE
@@ -123,6 +123,8 @@ who is in paperclip           -> /pc agents
 what about ABC-9              -> /pc task ABC-9
 comments ABC-9                -> /pc comments ABC-9
 ```
+
+If agents carry `metadata.tags`, the agents command displays them. Use `/pc agents --tags` for a tag summary or `/pc agents --tag research` to filter agents by one tag.
 
 Write rewrites are disabled by default. To allow phrases like `move THE-9 done`, set both:
 
