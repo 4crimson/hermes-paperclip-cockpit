@@ -8,13 +8,14 @@ import shlex
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -96,6 +97,16 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
+def _as_positive_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _writes_enabled() -> bool:
@@ -255,6 +266,24 @@ def _reset_on_gateway_shutdown_reasons() -> set[str]:
         or gateway.get("reset_interrupted_reasons")
     )
     return {item.strip().casefold() for item in _listify(reasons) if item.strip()}
+
+
+def _gateway_reset_age_minutes() -> float | None:
+    gateway = _gateway_config()
+    return _as_positive_float(
+        gateway.get("reset_session_age_minutes")
+        or gateway.get("reset_after_minutes")
+        or gateway.get("max_session_age_minutes")
+    )
+
+
+def _gateway_reset_idle_minutes() -> float | None:
+    gateway = _gateway_config()
+    return _as_positive_float(
+        gateway.get("reset_idle_minutes")
+        or gateway.get("reset_after_idle_minutes")
+        or gateway.get("max_idle_minutes")
+    )
 
 
 def _sanitize_command_name(value: str) -> str:
@@ -1020,9 +1049,99 @@ def _maybe_reset_gateway_shutdown_context(event: Any, gateway: Any = None, sessi
         return False
 
 
+def _datetime_value(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _minutes_since(value: Any, now: datetime) -> float | None:
+    moment = _datetime_value(value)
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=now.tzinfo)
+    return max(0.0, (now - moment.astimezone(now.tzinfo)).total_seconds() / 60.0)
+
+
+def _maybe_reset_stale_gateway_context(event: Any, gateway: Any = None, session_store: Any = None) -> bool:
+    max_age = _gateway_reset_age_minutes()
+    max_idle = _gateway_reset_idle_minutes()
+    if max_age is None and max_idle is None:
+        return False
+
+    source = getattr(event, "source", None)
+    if source is None:
+        return False
+
+    store = session_store or getattr(gateway, "session_store", None)
+    if store is None:
+        return False
+
+    try:
+        if gateway is not None and hasattr(gateway, "_session_key_for_source"):
+            session_key = str(gateway._session_key_for_source(source) or "")
+        elif hasattr(store, "_generate_session_key"):
+            session_key = str(store._generate_session_key(source) or "")
+        else:
+            session_key = ""
+    except Exception as exc:
+        logger.debug("Paperclip Cockpit could not resolve gateway session key: %s", exc)
+        return False
+
+    if not session_key:
+        return False
+
+    try:
+        ensure_loaded = getattr(store, "_ensure_loaded", None)
+        if callable(ensure_loaded):
+            ensure_loaded()
+        entries = getattr(store, "_entries", {}) or {}
+        entry = entries.get(session_key)
+        if entry is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        age = _minutes_since(getattr(entry, "created_at", None), now)
+        idle = _minutes_since(getattr(entry, "updated_at", None), now)
+        should_reset_age = max_age is not None and age is not None and age >= max_age
+        should_reset_idle = max_idle is not None and idle is not None and idle >= max_idle
+        if not should_reset_age and not should_reset_idle:
+            return False
+
+        reset_session = getattr(store, "reset_session", None)
+        if not callable(reset_session):
+            return False
+
+        reset_session(session_key)
+        logger.info(
+            "Paperclip Cockpit reset stale Hermes gateway session %s (age=%.1f idle=%.1f max_age=%s max_idle=%s)",
+            session_key,
+            age if age is not None else -1,
+            idle if idle is not None else -1,
+            max_age,
+            max_idle,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Paperclip Cockpit failed to reset stale gateway context: %s", exc)
+        return False
+
+
 def _pre_gateway_dispatch(event: Any, **kwargs: Any) -> dict[str, str] | None:
     if not _event_allowed(event):
         return None
+    _maybe_reset_stale_gateway_context(
+        event,
+        gateway=kwargs.get("gateway"),
+        session_store=kwargs.get("session_store"),
+    )
     _maybe_reset_gateway_shutdown_context(
         event,
         gateway=kwargs.get("gateway"),

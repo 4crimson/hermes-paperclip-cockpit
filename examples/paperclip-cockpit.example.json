@@ -5,7 +5,9 @@
     "register_pc_fallback": false
   },
   "gateway": {
-    "reset_on_gateway_shutdown": false
+    "reset_on_gateway_shutdown": false,
+    "reset_session_age_minutes": 0,
+    "reset_idle_minutes": 0
   },
   "company_hints": ["Example Workspace"],
   "labels": {

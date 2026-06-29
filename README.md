@@ -74,12 +74,16 @@ Optional gateway behavior:
 ```json
 {
   "gateway": {
-    "reset_on_gateway_shutdown": true
+    "reset_on_gateway_shutdown": true,
+    "reset_session_age_minutes": 60,
+    "reset_idle_minutes": 15
   }
 }
 ```
 
 When enabled, the plugin resets Hermes gateway sessions that Hermes marked as `resume_pending` after an interrupted gateway shutdown. This is useful for command-cockpit profiles where a fresh Telegram turn is safer than automatic continuation.
+
+`reset_session_age_minutes` and `reset_idle_minutes` are optional stale-context guards. They reset the Hermes chat session before the LLM runs when a command-cockpit session is too old or idle too long. This keeps Telegram control surfaces from carrying stale plans or phantom background work for hours.
 
 Company selection order:
 

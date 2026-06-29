@@ -4,6 +4,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 
@@ -175,6 +176,48 @@ class RewriteTests(unittest.TestCase):
         )
 
         self.assertFalse(paperclip_cockpit._maybe_reset_gateway_shutdown_context(event, gateway=gateway))
+
+    def test_stale_gateway_session_reset_by_age(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write('{"gateway":{"reset_session_age_minutes":60}}')
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+
+            session_key = "agent:main:telegram:dm:1"
+
+            class Store:
+                def __init__(self):
+                    now = datetime.now(timezone.utc)
+                    self._entries = {
+                        session_key: SimpleNamespace(
+                            created_at=now - timedelta(minutes=90),
+                            updated_at=now,
+                        )
+                    }
+                    self.reset_calls = []
+
+                def _ensure_loaded(self):
+                    return None
+
+                def reset_session(self, key):
+                    self.reset_calls.append(key)
+                    return SimpleNamespace(session_id="fresh")
+
+            store = Store()
+            gateway = SimpleNamespace(
+                session_store=store,
+                _session_key_for_source=lambda source: session_key,
+            )
+            event = SimpleNamespace(
+                text="show paperclip companies",
+                source=SimpleNamespace(
+                    platform=SimpleNamespace(value="telegram"),
+                    chat_id="1",
+                ),
+            )
+
+            self.assertTrue(paperclip_cockpit._maybe_reset_stale_gateway_context(event, gateway=gateway))
+            self.assertEqual(store.reset_calls, [session_key])
 
 
 if __name__ == "__main__":
