@@ -49,7 +49,19 @@ DEFAULT_TERMS = {
 
 DEFAULT_ALIASES = {
     "help": ["help", "commands", "?", "помощь", "команды"],
-    "companies": ["companies", "company", "orgs", "org", "organizations", "организации", "компании"],
+    "companies": [
+        "companies",
+        "company",
+        "orgs",
+        "org",
+        "organizations",
+        "list companies",
+        "организации",
+        "компании",
+        "компаний",
+        "список компаний",
+        "список организаций",
+    ],
     "health": ["health", "ping", "здоровье"],
     "agents": ["agents", "people", "staff", "roster", "who is in", "агенты", "сотрудники"],
     "tasks": ["tasks", "issues", "list", "таски", "задачи"],

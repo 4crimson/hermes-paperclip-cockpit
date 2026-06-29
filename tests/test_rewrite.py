@@ -21,6 +21,9 @@ class RewriteTests(unittest.TestCase):
     def test_rewrites_companies(self):
         self.assertEqual(paperclip_cockpit._rewrite_text("show paperclip companies"), "/pc companies")
 
+    def test_rewrites_russian_company_genitive(self):
+        self.assertEqual(paperclip_cockpit._rewrite_text("покажи список компаний"), "/pc companies")
+
     def test_rewrites_russian_tasks(self):
         self.assertEqual(paperclip_cockpit._rewrite_text("покажи задачи"), "/pc tasks")
 
