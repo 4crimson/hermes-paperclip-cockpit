@@ -414,6 +414,56 @@ class RewriteTests(unittest.TestCase):
         self.assertNotIn("Safety:", output)
         self.assertNotIn("Company selection:", output)
 
+    def test_human_task_card_and_full_comments(self):
+        comments = [
+            {"authorType": "user", "createdAt": f"2026-01-0{i}T00:00:00Z", "body": f"Comment {i}"}
+            for i in range(1, 5)
+        ]
+
+        def fake_api(path, **kwargs):
+            if path == "/issues/EX-1":
+                return {
+                    "id": "i1",
+                    "companyId": "c1",
+                    "identifier": "EX-1",
+                    "title": "Readable task",
+                    "description": "Long description",
+                    "status": "in_progress",
+                    "priority": "high",
+                    "assigneeAgentId": "a1",
+                    "parentId": None,
+                }
+            if path == "/companies/c1/agents":
+                return [{"id": "a1", "name": "Alice", "status": "active"}]
+            if path == "/issues/i1/comments":
+                return comments
+            raise AssertionError(path)
+
+        paperclip_cockpit._api = fake_api
+        task = paperclip_cockpit._router("task EX-1")
+        self.assertIn("EX-1", task)
+        self.assertIn("Readable task", task)
+        self.assertIn("Status: in progress", task)
+        self.assertIn("Assignee: Alice", task)
+        self.assertIn("Comment 2", task)
+        self.assertIn("Comment 4", task)
+        self.assertNotIn("Comment 1", task)
+        self.assertIn("/pc task EX-1 full", task)
+
+        full_task = paperclip_cockpit._router("task EX-1 full")
+        self.assertIn("## Description", full_task)
+        self.assertIn("Long description", full_task)
+
+        notes = paperclip_cockpit._router("comments EX-1")
+        self.assertIn("Comments: EX-1", notes)
+        self.assertIn("Comment 2", notes)
+        self.assertIn("Comment 4", notes)
+        self.assertNotIn("---", notes)
+
+        full_notes = paperclip_cockpit._router("comments EX-1 full")
+        self.assertIn("--- user 2026-01-01T00:00:00Z ---", full_notes)
+        self.assertIn("Comment 1", full_notes)
+
 
 if __name__ == "__main__":
     unittest.main()
