@@ -174,6 +174,9 @@ Project-specific wording belongs in `paperclip-cockpit.json`, not in the plugin.
 
 ## Development
 
+Roadmap for the configurable human-readable Telegram presentation layer:
+[`docs/human-readable-roadmap.md`](docs/human-readable-roadmap.md).
+
 Run local checks:
 
 ```bash
