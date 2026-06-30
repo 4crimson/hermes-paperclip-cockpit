@@ -1200,6 +1200,24 @@ def _debug_cmd(raw_args: str = "") -> str:
     return "\n".join(parts).strip()
 
 
+def _humanize_action_output(text: str) -> str:
+    lines = str(text or "").splitlines()
+    filtered: list[str] = []
+    skip_until_blank = False
+    hidden_sections = {"safety", "company selection"}
+    for line in lines:
+        heading = line.strip().rstrip(":").casefold()
+        if heading in hidden_sections:
+            skip_until_blank = True
+            continue
+        if skip_until_blank:
+            if not line.strip():
+                skip_until_blank = False
+            continue
+        filtered.append(line)
+    return "\n".join(filtered).strip()
+
+
 def _format_error(exc: Exception) -> str:
     message = str(exc)
     errors = _presentation_config().get("errors", {})
@@ -1255,18 +1273,29 @@ def _run_action(name: str, action: dict[str, Any], raw_args: str) -> str:
     output = result.stdout.strip()
     error = result.stderr.strip()
     presentation = action.get("presentation")
+    action_mode = "passthrough"
     action_clip = None
     if isinstance(presentation, dict):
+        action_mode = str(presentation.get("mode") or "passthrough").strip().casefold()
         try:
             action_clip = int(presentation.get("clip")) if presentation.get("clip") is not None else None
         except (TypeError, ValueError):
             action_clip = None
+    limit = action_clip or _presentation_limit("output_chars", 12000) or 12000
+
+    def present(text: str) -> str:
+        if action_mode == "raw":
+            return text
+        if action_mode == "human":
+            return _clip(_humanize_action_output(text), limit)
+        return _clip(text, limit)
+
     if result.returncode == 0:
-        return _clip(output or "OK", action_clip or _presentation_limit("output_chars", 12000) or 12000)
+        return present(output or "OK")
     body = output
     if error:
         body = f"{body}\n\nstderr:\n{error}".strip()
-    return _clip(f"Project action exited with {result.returncode}.\n\n{body}", action_clip or _presentation_limit("output_chars", 12000) or 12000)
+    return present(f"Project action exited with {result.returncode}.\n\n{body}")
 
 
 def _router(raw_args: str) -> str:

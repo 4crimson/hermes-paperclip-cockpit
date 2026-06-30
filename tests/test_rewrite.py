@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -392,6 +393,26 @@ class RewriteTests(unittest.TestCase):
             paperclip_cockpit._api = fake_api
             output = paperclip_cockpit._router("status")
         self.assertIn("GET /health failed", output)
+
+    def test_project_action_human_presentation_filters_technical_blocks(self):
+        script = "print('Keep this')\nprint('Safety:')\nprint('- noisy')\nprint()\nprint('Company selection:')\nprint('- noisy')\nprint()\nprint('Still here')"
+        body = {
+            "actions": {
+                "demo": {
+                    "exec": [sys.executable, "-c", script],
+                    "presentation": {"mode": "human", "clip": 1000},
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            output = paperclip_cockpit._router("demo")
+        self.assertIn("Keep this", output)
+        self.assertIn("Still here", output)
+        self.assertNotIn("Safety:", output)
+        self.assertNotIn("Company selection:", output)
 
 
 if __name__ == "__main__":
