@@ -41,6 +41,7 @@
   "markers": ["paperclip", "work"],
   "presentation": {
     "mode": "human",
+    "language": "en",
     "home": {
       "intro": "Connected to the project workspace in Paperclip.",
       "items": [
@@ -74,6 +75,7 @@
       "usage": "sample ARG",
       "aliases": ["demo"],
       "natural_aliases": ["run sample"],
+      "description": "run the sample project action",
       "exec": ["./scripts/project-action", "sample"],
       "timeout": 120
     }

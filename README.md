@@ -117,6 +117,7 @@ Projects can tune the visible voice without changing plugin code:
 {
   "presentation": {
     "mode": "human",
+    "language": "en",
     "home": {
       "intro": "Connected to Paperclip.",
       "items": [
@@ -135,6 +136,23 @@ Projects can tune the visible voice without changing plugin code:
     "visibility": {
       "status_runs": false,
       "uuids": false
+    }
+  }
+}
+```
+
+Set `presentation.language` to `ru` for Russian technical help headings, safety labels, and built-in command descriptions. Project actions can expose help text with `description`:
+
+```json
+{
+  "presentation": {
+    "language": "ru"
+  },
+  "actions": {
+    "status": {
+      "usage": "status",
+      "description": "кратко показать состояние проекта",
+      "exec": ["node", "scripts/project.mjs", "status"]
     }
   }
 }

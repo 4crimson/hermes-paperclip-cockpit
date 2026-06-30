@@ -15,7 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -142,6 +142,66 @@ DEFAULT_PRESENTATION = {
     "errors": {
         "show_details": False,
         "show_debug_hint": True,
+    },
+}
+
+DEFAULT_HELP_TEXT = {
+    "en": {
+        "usage_heading": "Usage:",
+        "project_actions_heading": "Project actions:",
+        "safety_heading": "Safety:",
+        "slash_writes": "slash-command writes",
+        "natural_writes": "natural-language writes",
+        "enabled": "enabled",
+        "disabled": "disabled",
+        "company_heading": "Company selection:",
+        "company_config_hints": "- config company_hints",
+        "company_env": "- env PAPERCLIP_DEFAULT_COMPANY or PAPERCLIP_COMPANY_NAME",
+        "company_cwd": "- otherwise Hermes terminal.cwd is fuzzy-matched to a Paperclip company",
+        "company_flag": "- pass --company \"Company Name\" when needed",
+    },
+    "ru": {
+        "usage_heading": "Команды:",
+        "project_actions_heading": "Команды проекта:",
+        "safety_heading": "Безопасность:",
+        "slash_writes": "записи через slash-команды",
+        "natural_writes": "записи через обычный текст",
+        "enabled": "включены",
+        "disabled": "выключены",
+        "company_heading": "Выбор компании:",
+        "company_config_hints": "- подсказки из config company_hints",
+        "company_env": "- переменные PAPERCLIP_DEFAULT_COMPANY или PAPERCLIP_COMPANY_NAME",
+        "company_cwd": "- иначе Hermes terminal.cwd сопоставляется с компанией Paperclip",
+        "company_flag": "- можно явно передать --company \"Company Name\"",
+    },
+}
+
+DEFAULT_COMMAND_DESCRIPTIONS = {
+    "en": {
+        "help": "show commands",
+        "companies": "list companies",
+        "health": "check Paperclip API health",
+        "status": "short workspace overview",
+        "agents": "list agents",
+        "tasks": "list issues",
+        "task": "show one issue",
+        "comments": "show issue comments",
+        "move": "move issue status",
+        "capabilities": "show plugin capabilities",
+        "debug": "diagnostics",
+    },
+    "ru": {
+        "help": "показать команды",
+        "companies": "список компаний",
+        "health": "проверить Paperclip API",
+        "status": "краткий обзор состояния",
+        "agents": "список агентов",
+        "tasks": "список задач",
+        "task": "показать одну задачу",
+        "comments": "показать комментарии задачи",
+        "move": "изменить статус задачи",
+        "capabilities": "показать возможности плагина",
+        "debug": "диагностика",
     },
 }
 
@@ -414,6 +474,35 @@ def _markers() -> set[str]:
 def _presentation_config() -> dict[str, Any]:
     raw = _config().get("presentation", {})
     return _merge_dict(DEFAULT_PRESENTATION, raw if isinstance(raw, dict) else {})
+
+
+def _presentation_language() -> str:
+    env_language = os.environ.get("PAPERCLIP_COCKPIT_LANGUAGE", "")
+    raw = env_language or _presentation_config().get("language") or _config().get("language") or "en"
+    language = str(raw).strip().casefold().split("-")[0]
+    return language if language in DEFAULT_HELP_TEXT else "en"
+
+
+def _help_config() -> dict[str, Any]:
+    help_config = _presentation_config().get("help", {})
+    return help_config if isinstance(help_config, dict) else {}
+
+
+def _help_text(key: str) -> str:
+    configured = _help_config().get(key)
+    if configured is not None:
+        return str(configured)
+    language = _presentation_language()
+    return DEFAULT_HELP_TEXT.get(language, DEFAULT_HELP_TEXT["en"]).get(key, DEFAULT_HELP_TEXT["en"].get(key, key))
+
+
+def _command_description(key: str) -> str:
+    configured = _help_config().get("command_descriptions", {})
+    if isinstance(configured, dict) and configured.get(key):
+        return str(configured.get(key))
+    language = _presentation_language()
+    descriptions = DEFAULT_COMMAND_DESCRIPTIONS.get(language, DEFAULT_COMMAND_DESCRIPTIONS["en"])
+    return str(descriptions.get(key) or "")
 
 
 def _presentation_mode() -> str:
@@ -710,41 +799,65 @@ def _action_usage(name: str, action: dict[str, Any]) -> str:
     return usage or name
 
 
+def _help_line(command_text: str, description: str = "") -> str:
+    if description:
+        return f"{command_text} - {description}"
+    return command_text
+
+
+def _action_description(action: dict[str, Any]) -> str:
+    presentation = action.get("presentation", {})
+    if isinstance(presentation, dict):
+        for key in ("description", "help", "text"):
+            if presentation.get(key):
+                return str(presentation.get(key))
+    for key in ("description", "help", "text", "summary"):
+        if action.get(key):
+            return str(action.get(key))
+    return ""
+
+
 def _technical_help(_: str = "") -> str:
-    writes = "enabled" if _writes_enabled() else "disabled"
-    nl_writes = "enabled" if _nl_writes_enabled() else "disabled"
+    writes = _help_text("enabled") if _writes_enabled() else _help_text("disabled")
+    nl_writes = _help_text("enabled") if _nl_writes_enabled() else _help_text("disabled")
     command = _slash()
     lines = [
-        "Usage:",
-        f"{command} help",
-        f"{command} {_term('companies')}",
-        f"{command} {_term('health')}",
-        f"{command} {_term('status')} [full]",
-        f"{command} {_term('agents')} [--company NAME] [--tags|--tag TAG]",
-        f"{command} {_term('tasks')} [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]",
-        f"{command} {_term('task')} ISSUE",
-        f"{command} {_term('comments')} ISSUE",
-        f"{command} {_term('move')} ISSUE <todo|in_progress|blocked|done|cancelled>",
-        f"{command} {_term('capabilities')}",
-        f"{command} {_term('debug')}",
+        _help_text("usage_heading"),
+        _help_line(f"{command} help", _command_description("help")),
+        _help_line(f"{command} {_term('companies')}", _command_description("companies")),
+        _help_line(f"{command} {_term('health')}", _command_description("health")),
+        _help_line(f"{command} {_term('status')} [full]", _command_description("status")),
+        _help_line(f"{command} {_term('agents')} [--company NAME] [--tags|--tag TAG]", _command_description("agents")),
+        _help_line(
+            f"{command} {_term('tasks')} [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]",
+            _command_description("tasks"),
+        ),
+        _help_line(f"{command} {_term('task')} ISSUE", _command_description("task")),
+        _help_line(f"{command} {_term('comments')} ISSUE", _command_description("comments")),
+        _help_line(
+            f"{command} {_term('move')} ISSUE <todo|in_progress|blocked|done|cancelled>",
+            _command_description("move"),
+        ),
+        _help_line(f"{command} {_term('capabilities')}", _command_description("capabilities")),
+        _help_line(f"{command} {_term('debug')}", _command_description("debug")),
     ]
     actions = _actions()
     if actions:
-        lines.extend(["", "Project actions:"])
+        lines.extend(["", _help_text("project_actions_heading")])
         for name, action in actions.items():
-            lines.append(f"{command} {_action_usage(name, action)}")
+            lines.append(_help_line(f"{command} {_action_usage(name, action)}", _action_description(action)))
     lines.extend(
         [
             "",
-            "Safety:",
-            f"- slash-command writes: {writes}",
-            f"- natural-language writes: {nl_writes}",
+            _help_text("safety_heading"),
+            f"- {_help_text('slash_writes')}: {writes}",
+            f"- {_help_text('natural_writes')}: {nl_writes}",
             "",
-            "Company selection:",
-            "- config company_hints",
-            "- env PAPERCLIP_DEFAULT_COMPANY or PAPERCLIP_COMPANY_NAME",
-            "- otherwise Hermes terminal.cwd is fuzzy-matched to a Paperclip company",
-            "- pass --company \"Company Name\" when needed",
+            _help_text("company_heading"),
+            _help_text("company_config_hints"),
+            _help_text("company_env"),
+            _help_text("company_cwd"),
+            _help_text("company_flag"),
         ]
     )
     return "\n".join(lines)

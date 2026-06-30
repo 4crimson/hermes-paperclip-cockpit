@@ -237,6 +237,32 @@ class RewriteTests(unittest.TestCase):
         self.assertIn("Safety:", output)
         self.assertIn("Company selection:", output)
 
+    def test_help_full_uses_configured_language_and_action_descriptions(self):
+        body = {
+            "command": {"name": "work"},
+            "presentation": {"language": "ru"},
+            "actions": {
+                "sample": {
+                    "usage": "sample ARG",
+                    "description": "пример проектной команды",
+                    "exec": ["echo", "ok"],
+                }
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            output = paperclip_cockpit._router("help full")
+
+        self.assertIn("Команды:", output)
+        self.assertIn("/work help - показать команды", output)
+        self.assertIn("Команды проекта:", output)
+        self.assertIn("/work sample ARG - пример проектной команды", output)
+        self.assertIn("Безопасность:", output)
+        self.assertIn("- записи через slash-команды: выключены", output)
+        self.assertIn("Выбор компании:", output)
+
     def test_raw_presentation_env_uses_technical_help(self):
         os.environ["PAPERCLIP_COCKPIT_PRESENTATION"] = "raw"
         output = paperclip_cockpit._router("")

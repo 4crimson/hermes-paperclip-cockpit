@@ -1,5 +1,5 @@
 name: paperclip-cockpit
-version: 0.6.0
+version: 0.6.1
 description: "A compact Hermes plugin that exposes Paperclip control commands to Telegram and other Hermes gateways."
 author: 4crimson
 hooks:
