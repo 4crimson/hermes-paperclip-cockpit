@@ -15,7 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -1500,6 +1500,27 @@ def _rewrite_alias_command(raw: str, lowered: str, key: str) -> str | None:
     return None
 
 
+def _tags_requested(lowered: str) -> bool:
+    return _contains_any(lowered, {"tag", "tags", "тег", "теги", "тегами", "по тегу"})
+
+
+def _agent_tags_tail(lowered: str) -> str:
+    if _contains_any(lowered, {"с тег", "with tag"}):
+        return "full"
+    return "--tags" if _tags_requested(lowered) else ""
+
+
+def _rewrite_agents_command(raw: str, lowered: str) -> str | None:
+    rewritten = _rewrite_alias_command(raw, lowered, "agents")
+    if rewritten:
+        if _tags_requested(lowered) and "--tag" not in rewritten:
+            return _slash(_term("agents"), _agent_tags_tail(lowered))
+        return rewritten
+    if _contains_alias(lowered, "agents"):
+        return _slash(_term("agents"), _agent_tags_tail(lowered))
+    return None
+
+
 def _rewrite_action(raw: str, lowered: str) -> str | None:
     for name, action in _actions().items():
         natural = _listify(action.get("natural_aliases"))
@@ -1607,13 +1628,13 @@ def _rewrite_text(text: str) -> str | None:
     if rewritten or _contains_alias(lowered, "health") or _contains_any(lowered, {"статус paperclip", "статус перклип"}):
         return rewritten or _slash(_term("health"))
 
+    rewritten = _rewrite_agents_command(raw, lowered)
+    if rewritten:
+        return rewritten
+
     rewritten = _rewrite_alias_command(raw, lowered, "companies")
     if rewritten or _contains_alias(lowered, "companies") or (marker and _contains_any(lowered, {"organizations", "организации", "компании"})):
         return rewritten or _slash(_term("companies"))
-
-    rewritten = _rewrite_alias_command(raw, lowered, "agents")
-    if rewritten or _contains_alias(lowered, "agents"):
-        return rewritten or _slash(_term("agents"))
 
     rewritten = _rewrite_alias_command(raw, lowered, "tasks")
     if rewritten or _contains_alias(lowered, "tasks"):

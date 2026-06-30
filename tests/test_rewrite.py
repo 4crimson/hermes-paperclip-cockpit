@@ -295,6 +295,23 @@ class RewriteTests(unittest.TestCase):
         self.assertIn("/work members - team list", output)
         self.assertIn("/work items - work queue", output)
 
+    def test_agent_alias_wins_over_company_alias_when_both_present(self):
+        body = {
+            "command": {"name": "agora"},
+            "terms": {"agents": "philosophers", "companies": "agoras"},
+            "aliases": {
+                "agents": ["философы", "философов", "список философов"],
+                "companies": ["агора", "агоры", "список агор"],
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            rewritten = paperclip_cockpit._rewrite_text("Дай список философов с тегами из агоры")
+
+        self.assertEqual(rewritten, "/agora philosophers full")
+
     def test_human_status_summarizes_and_hides_run_ids(self):
         run_id = "11111111-2222-3333-4444-555555555555"
 
