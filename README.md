@@ -12,6 +12,8 @@ This is complementary to [NousResearch/hermes-paperclip-adapter](https://github.
 
 - Adds one visible Hermes command. Default: `/pc`; configurable per project.
 - Lists Paperclip companies, agents, tasks, task details, and comments.
+- Shows human-readable home, status, agent, task, and comment views by default.
+- Keeps raw technical output available through `full`, `raw`, `debug`, and `capabilities`.
 - Can move an issue between Paperclip statuses when writes are explicitly enabled.
 - Can rewrite simple natural-language Telegram messages into `/pc ...` commands before the LLM is called.
 - Can route project-specific natural-language intents into configured project actions.
@@ -59,6 +61,7 @@ PAPERCLIP_COCKPIT_NL_WRITES=0
 PAPERCLIP_COCKPIT_REGISTER_EXPLICIT=0
 PAPERCLIP_COCKPIT_ALLOWED_PLATFORMS=telegram
 PAPERCLIP_COCKPIT_ALLOWED_CHATS=
+PAPERCLIP_COCKPIT_PRESENTATION=human
 ```
 
 ## Project Config
@@ -93,18 +96,66 @@ Company selection order:
 4. The basename of `terminal.cwd` from the Hermes profile config.
 5. The Hermes profile directory name.
 
+### Human-Readable Presentation
+
+The default presentation mode is `human`: Telegram output is compact, readable, and low-noise. Technical detail is still available explicitly:
+
+```text
+/pc help full
+/pc status full
+/pc agents full
+/pc tasks full
+/pc task ABC-1 full
+/pc comments ABC-1 full
+/pc debug
+/pc capabilities
+```
+
+Projects can tune the visible voice without changing plugin code:
+
+```json
+{
+  "presentation": {
+    "mode": "human",
+    "home": {
+      "intro": "Connected to Paperclip.",
+      "items": [
+        { "action": "status", "text": "show current state" },
+        { "action": "agents", "text": "show agents" },
+        { "action": "tasks", "text": "show tasks" }
+      ]
+    },
+    "limits": {
+      "agents": 12,
+      "tasks": 10,
+      "comments": 3,
+      "comment_chars": 500,
+      "runs": 0
+    },
+    "visibility": {
+      "status_runs": false,
+      "uuids": false
+    }
+  }
+}
+```
+
+Use `labels`, `terms`, and `aliases` for project vocabulary. The plugin code stays generic; project-specific nouns belong in config.
+
 ## Commands
 
 ```text
 /pc help
 /pc companies
 /pc health
+/pc status [full]
 /pc agents [--company NAME] [--tags|--tag TAG]
 /pc tasks [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]
 /pc task ISSUE
 /pc comments ISSUE
 /pc move ISSUE <todo|in_progress|blocked|done|cancelled>
 /pc capabilities
+/pc debug
 ```
 
 Short aliases:
@@ -167,6 +218,7 @@ Copy or reference `skills/paperclip-control/SKILL.md` from your Hermes assistant
 
 - Paperclip facts should come from the configured command, not memory.
 - Writes require explicit user intent.
+- Routine state should use compact human commands; use `full` or `debug` only when technical detail is needed.
 - Replies should label Paperclip API facts separately from inference.
 - Durable work needs a real Paperclip issue/run/automation identifier; local notes, `delegate_task`, and `execute_code` are not a substitute for trackable Paperclip state.
 

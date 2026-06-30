@@ -15,7 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "paperclip-cockpit"
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 
 API_BASE = os.environ.get("PAPERCLIP_API_BASE", "http://127.0.0.1:3100/api").rstrip("/")
 PUBLIC_BASE = os.environ.get("PAPERCLIP_PUBLIC_BASE", API_BASE.removesuffix("/api")).rstrip("/")
@@ -40,12 +40,14 @@ DEFAULT_LABELS = {
 DEFAULT_TERMS = {
     "companies": "companies",
     "health": "health",
+    "status": "status",
     "agents": "agents",
     "tasks": "tasks",
     "task": "task",
     "comments": "comments",
     "move": "move",
     "capabilities": "capabilities",
+    "debug": "debug",
 }
 
 DEFAULT_ALIASES = {
@@ -64,15 +66,84 @@ DEFAULT_ALIASES = {
         "список организаций",
     ],
     "health": ["health", "ping", "здоровье"],
+    "status": ["status", "state", "overview", "статус", "состояние"],
     "agents": ["agents", "people", "staff", "roster", "who is in", "агенты", "сотрудники"],
     "tasks": ["tasks", "issues", "list", "таски", "задачи"],
     "task": ["task", "issue", "t", "задача"],
     "comments": ["comments", "comment", "комменты", "комментарии"],
     "move": ["move", "m", "двинь", "перемести"],
     "capabilities": ["capabilities", "caps", "config", "settings", "возможности", "настройки"],
+    "debug": ["debug", "diagnostics", "diag", "raw", "отладка", "диагностика"],
 }
 
 DEFAULT_MARKERS = ["paperclip", "пеперклип", "перклип", "pc", "пер клип"]
+
+DEFAULT_PRESENTATION = {
+    "mode": "human",
+    "language": "en",
+    "symbols": "minimal",
+    "show_technical_by_default": False,
+    "status_words": {
+        "todo": "todo",
+        "in_progress": "in progress",
+        "blocked": "blocked",
+        "done": "done",
+        "cancelled": "cancelled",
+        "idle": "idle",
+        "active": "active",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "cancelled_run": "cancelled",
+    },
+    "limits": {
+        "agents": 12,
+        "tasks": 10,
+        "comments": 3,
+        "comment_chars": 500,
+        "runs": 0,
+        "line_chars": 900,
+        "output_chars": 12000,
+    },
+    "home": {
+        "intro": "Connected to Paperclip.",
+        "title": "",
+        "items": [
+            {"action": "status", "text": "show current state"},
+            {"action": "agents", "text": "show agents"},
+            {"action": "tasks", "text": "show tasks"},
+        ],
+        "more": [
+            {"command": "help full", "text": "technical help"},
+            {"action": "debug", "text": "diagnostics"},
+        ],
+    },
+    "sections": {
+        "useful_commands": "Useful commands:",
+        "more": "More:",
+        "details": "Details:",
+        "recent_comments": "Recent comments:",
+        "open_tasks": "Open tasks:",
+        "active_agents": "Active:",
+        "idle_agents": "Idle:",
+    },
+    "visibility": {
+        "home_safety": False,
+        "home_company_selection": False,
+        "status_agents": "summary",
+        "status_tasks": "summary",
+        "status_runs": False,
+        "agent_status_rows": "active_only",
+        "uuids": False,
+    },
+    "debug": {
+        "commands": ["debug", "capabilities"],
+        "full_tokens": ["full", "raw", "--raw", "--full"],
+    },
+    "errors": {
+        "show_details": False,
+        "show_debug_hint": True,
+    },
+}
 
 
 class PaperclipError(RuntimeError):
@@ -235,6 +306,7 @@ def _config() -> dict[str, Any]:
         "actions": {},
         "intents": {},
         "gateway": {},
+        "presentation": DEFAULT_PRESENTATION,
     }
     for path in _config_paths():
         config = _merge_dict(config, _read_json(path))
@@ -337,6 +409,131 @@ def _markers() -> set[str]:
     markers.add(_command_name())
     markers.update(_listify(_config().get("markers")))
     return {item.strip().casefold() for item in markers if item.strip()}
+
+
+def _presentation_config() -> dict[str, Any]:
+    raw = _config().get("presentation", {})
+    return _merge_dict(DEFAULT_PRESENTATION, raw if isinstance(raw, dict) else {})
+
+
+def _presentation_mode() -> str:
+    env_mode = os.environ.get("PAPERCLIP_COCKPIT_PRESENTATION", "")
+    mode = env_mode or _presentation_config().get("mode") or "human"
+    return str(mode).strip().casefold()
+
+
+def _human_enabled() -> bool:
+    mode = _presentation_mode()
+    if mode in {"raw", "technical", "debug", "off", "false", "0"}:
+        return False
+    return True
+
+
+def _presentation_section(key: str, fallback: str) -> str:
+    sections = _presentation_config().get("sections", {})
+    return str(sections.get(key) or fallback)
+
+
+def _presentation_limit(key: str, default: int) -> int:
+    limits = _presentation_config().get("limits", {})
+    try:
+        value = int(limits.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return max(0, value)
+
+
+def _presentation_visibility(key: str, default: Any = None) -> Any:
+    visibility = _presentation_config().get("visibility", {})
+    return visibility.get(key, default) if isinstance(visibility, dict) else default
+
+
+def _status_word(value: Any) -> str:
+    raw = str(value or "unknown")
+    words = _presentation_config().get("status_words", {})
+    return str(words.get(raw, raw.replace("_", " "))) if isinstance(words, dict) else raw.replace("_", " ")
+
+
+def _full_tokens() -> set[str]:
+    debug = _presentation_config().get("debug", {})
+    tokens = _listify(debug.get("full_tokens") if isinstance(debug, dict) else None)
+    tokens.extend(DEFAULT_PRESENTATION["debug"]["full_tokens"])
+    return {item.strip().casefold() for item in tokens if item.strip()}
+
+
+def _strip_full_tokens(words: list[str]) -> tuple[list[str], bool]:
+    tokens = _full_tokens()
+    filtered: list[str] = []
+    full = False
+    for word in words:
+        if word.casefold() in tokens:
+            full = True
+        else:
+            filtered.append(word)
+    return filtered, full
+
+
+def _is_full_request(raw_args: str) -> bool:
+    _, full = _strip_full_tokens(_parse_words(raw_args))
+    return full
+
+
+def _line(text: Any, limit: int | None = None) -> str:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    max_chars = _presentation_limit("line_chars", 900) if limit is None else max(0, limit)
+    if not max_chars or len(value) <= max_chars:
+        return value
+    suffix = " ... [clipped]"
+    return f"{value[: max(0, max_chars - len(suffix))].rstrip()}{suffix}"
+
+
+def _clip_output(text: str) -> str:
+    return _clip(text, _presentation_limit("output_chars", 12000) or 12000)
+
+
+def _issue_ident(issue: dict[str, Any]) -> str:
+    ident = issue.get("identifier")
+    if ident:
+        return str(ident)
+    return _compact_id(issue.get("id") or "")
+
+
+def _format_command(value: str) -> str:
+    command = str(value or "").strip()
+    if not command:
+        return _slash()
+    if command.startswith("/"):
+        return command
+    return _slash(command)
+
+
+def _format_action_command(item: dict[str, Any]) -> str:
+    if item.get("command"):
+        return _format_command(str(item.get("command")))
+    action = str(item.get("action") or "").strip()
+    if not action:
+        return _slash()
+    return _slash(_term(action))
+
+
+def _append_more(lines: list[str], shown: int, total: int, command: str = "") -> None:
+    hidden = max(0, total - shown)
+    if hidden:
+        suffix = f"; {command}" if command else ""
+        lines.append(f"- and {hidden} more{suffix}")
+
+
+def _sort_issues_recent(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        issues,
+        key=lambda item: str(item.get("lastActivityAt") or item.get("updatedAt") or item.get("createdAt") or ""),
+        reverse=True,
+    )
+
+
+def _is_active_agent(agent: dict[str, Any]) -> bool:
+    status = str(agent.get("status") or "").casefold()
+    return bool(status and status not in {"idle", "offline", "inactive", "unknown"})
 
 
 def _company_hints() -> list[str]:
@@ -513,7 +710,7 @@ def _action_usage(name: str, action: dict[str, Any]) -> str:
     return usage or name
 
 
-def _help(_: str = "") -> str:
+def _technical_help(_: str = "") -> str:
     writes = "enabled" if _writes_enabled() else "disabled"
     nl_writes = "enabled" if _nl_writes_enabled() else "disabled"
     command = _slash()
@@ -522,12 +719,14 @@ def _help(_: str = "") -> str:
         f"{command} help",
         f"{command} {_term('companies')}",
         f"{command} {_term('health')}",
+        f"{command} {_term('status')} [full]",
         f"{command} {_term('agents')} [--company NAME] [--tags|--tag TAG]",
         f"{command} {_term('tasks')} [--company NAME] [open|all|todo|in_progress|blocked|done|cancelled] [limit]",
         f"{command} {_term('task')} ISSUE",
         f"{command} {_term('comments')} ISSUE",
         f"{command} {_term('move')} ISSUE <todo|in_progress|blocked|done|cancelled>",
         f"{command} {_term('capabilities')}",
+        f"{command} {_term('debug')}",
     ]
     actions = _actions()
     if actions:
@@ -551,6 +750,52 @@ def _help(_: str = "") -> str:
     return "\n".join(lines)
 
 
+def _human_home() -> str:
+    presentation = _presentation_config()
+    home = presentation.get("home", {})
+    if not isinstance(home, dict):
+        home = {}
+    title = str(home.get("title") or "").strip()
+    intro = str(home.get("intro") or "Connected to Paperclip.").strip()
+    items = home.get("items") if isinstance(home.get("items"), list) else DEFAULT_PRESENTATION["home"]["items"]
+    more = home.get("more") if isinstance(home.get("more"), list) else DEFAULT_PRESENTATION["home"]["more"]
+
+    lines: list[str] = []
+    if title:
+        lines.append(title)
+        lines.append("")
+    if intro:
+        lines.append(intro)
+        lines.append("")
+
+    if items:
+        lines.append(_presentation_section("useful_commands", "Useful commands:"))
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            command = _format_action_command(item)
+            text = str(item.get("text") or item.get("description") or "").strip()
+            lines.append(f"- {command}{f' - {text}' if text else ''}")
+        lines.append("")
+
+    if more:
+        lines.append(_presentation_section("more", "More:"))
+        for item in more:
+            if not isinstance(item, dict):
+                continue
+            command = _format_action_command(item)
+            text = str(item.get("text") or item.get("description") or "").strip()
+            lines.append(f"- {command}{f' - {text}' if text else ''}")
+
+    return "\n".join(line for line in lines).strip()
+
+
+def _help(raw_args: str = "") -> str:
+    if _human_enabled() and not _is_full_request(raw_args):
+        return _human_home()
+    return _technical_help(raw_args)
+
+
 def _health(_: str) -> str:
     data = _api("/health", timeout=5)
     if isinstance(data, dict):
@@ -558,12 +803,118 @@ def _health(_: str) -> str:
     return "Paperclip health: ok"
 
 
-def _companies_cmd(_: str) -> str:
-    return _format_companies(_companies())
+def _companies_cmd(raw_args: str = "") -> str:
+    companies = _companies()
+    if not _human_enabled() or _is_full_request(raw_args):
+        return _format_companies(companies)
+
+    lines = [f"Paperclip {_label('companies')}:"]
+    for company in sorted(companies, key=lambda item: str(item.get("name", "")).casefold()):
+        prefix = company.get("issuePrefix") or "-"
+        status = _status_word(company.get("status") or "unknown")
+        lines.append(f"- {company.get('name')} ({prefix}) - {status}")
+    return "\n".join(lines)
+
+
+def _runs_for_company(company_id: str) -> list[dict[str, Any]]:
+    try:
+        runs = _api(f"/companies/{company_id}/heartbeat-runs")
+    except PaperclipError:
+        return []
+    return runs if isinstance(runs, list) else []
+
+
+def _technical_status(company_token: str = "") -> str:
+    health = _api("/health", timeout=5)
+    company = _resolve_company(company_token)
+    agents = _api(f"/companies/{company['id']}/agents")
+    issues = [item for item in _api(f"/companies/{company['id']}/issues") if not item.get("hiddenAt")]
+    runs = _runs_for_company(company["id"])
+    agent_by_id = {agent["id"]: agent for agent in agents}
+
+    lines = [
+        "# Paperclip status",
+        f"- health: {'ok' if not isinstance(health, dict) or health.get('ok', True) else 'failed'}",
+        f"- {_label('company')}: {company.get('name')} ({company.get('issuePrefix') or '-'})",
+        f"- {_label('agents')}: {len(agents)}",
+        f"- {_label('tasks')}: {len(issues)}",
+        "",
+        f"## Recent {_label('tasks')}",
+    ]
+    recent_issues = _sort_issues_recent(issues)[: _presentation_limit("tasks", 10) or 10]
+    if not recent_issues:
+        lines.append(f"- No {_label('tasks')}.")
+    for issue in recent_issues:
+        assignee = _agent_name(agent_by_id, issue.get("assigneeAgentId"))
+        parent = "child" if issue.get("parentId") else "root"
+        lines.append(f"- {issue.get('status'):<12} {_issue_ident(issue):<8} {parent:<5} assignee={assignee} {issue.get('title')}")
+
+    lines.append("")
+    lines.append("## Recent runs")
+    if not runs:
+        lines.append("- No recent runs or runs endpoint unavailable.")
+    for run in _sort_issues_recent(runs)[: _presentation_limit("runs", 12) or 12]:
+        issue = run.get("contextSnapshot", {}).get("taskKey") or run.get("contextSnapshot", {}).get("issueId") or "-"
+        agent = _agent_name(agent_by_id, run.get("agentId"))
+        error = f" error={run.get('errorCode')}" if run.get("errorCode") else ""
+        lines.append(f"- {run.get('status', 'unknown'):<10} run={run.get('id')} issue={issue} agent={agent}{error} updated={run.get('updatedAt')}")
+
+    return "\n".join(lines)
+
+
+def _human_status(company_token: str = "") -> str:
+    health = _api("/health", timeout=5)
+    company = _resolve_company(company_token)
+    agents = _api(f"/companies/{company['id']}/agents")
+    issues = [item for item in _api(f"/companies/{company['id']}/issues") if not item.get("hiddenAt")]
+    active_agents = [agent for agent in agents if _is_active_agent(agent)]
+    open_issues = [issue for issue in issues if issue.get("status") in OPEN_STATUSES]
+    roots = [issue for issue in issues if not issue.get("parentId")]
+    done_roots = [issue for issue in roots if issue.get("status") == "done"]
+    latest_root = _sort_issues_recent(roots)[0] if roots else None
+    latest_done = _sort_issues_recent(done_roots)[0] if done_roots else None
+
+    ok = not isinstance(health, dict) or bool(health.get("ok", True))
+    lines = ["Paperclip is reachable." if ok else "Paperclip responded, but health is not ok.", ""]
+    lines.append(f"{_label('company').title()}: {company.get('name')}")
+    lines.append(f"{_label('agents').title()}: {len(agents)}")
+    lines.append(f"Active {_label('agents')}: {len(active_agents)}")
+    lines.append(f"Open {_label('tasks')}: {len(open_issues)}")
+    if latest_root:
+        lines.append(f"Latest {_label('task')}: {_issue_ident(latest_root)} - {_line(latest_root.get('title'), 160)}")
+    if latest_done:
+        lines.append(f"Latest done {_label('task')}: {_issue_ident(latest_done)} - {_line(latest_done.get('title'), 160)}")
+
+    if _presentation_visibility("status_runs", False):
+        runs = _runs_for_company(company["id"])
+        if runs:
+            counts: dict[str, int] = {}
+            for run in runs:
+                status = str(run.get("status") or "unknown")
+                counts[status] = counts.get(status, 0) + 1
+            lines.append(f"Recent runs: {len(runs)}")
+            for status, count in sorted(counts.items()):
+                lines.append(f"- {_status_word(status)}: {count}")
+
+    lines.extend(["", _presentation_section("details", "Details:")])
+    lines.append(f"- {_slash(_term('tasks'))}")
+    lines.append(f"- {_slash(_term('status'), 'full')}")
+    return "\n".join(lines)
+
+
+def _status_cmd(raw_args: str = "") -> str:
+    words, full = _strip_full_tokens(_parse_words(raw_args))
+    words, company_token = _extract_company(words)
+    if words and not company_token:
+        company_token = " ".join(words)
+    if not _human_enabled() or full:
+        return _technical_status(company_token)
+    return _human_status(company_token)
 
 
 def _agents_cmd(raw_args: str) -> str:
-    words, company_token = _extract_company(_parse_words(raw_args))
+    words, full = _strip_full_tokens(_parse_words(raw_args))
+    words, company_token = _extract_company(words)
     words, options = _extract_agent_options(words)
     if words and not company_token:
         company_token = " ".join(words)
@@ -584,6 +935,41 @@ def _agents_cmd(raw_args: str) -> str:
     tag_filter = str(options["tag"] or "")
     if tag_filter:
         agents = [agent for agent in agents if tag_filter in {tag.casefold() for tag in _agent_tags(agent)}]
+
+    if _human_enabled() and not full:
+        limit = _presentation_limit("agents", 12) or 12
+        active = sorted([agent for agent in agents if _is_active_agent(agent)], key=lambda item: str(item.get("name", "")).casefold())
+        idle = sorted([agent for agent in agents if not _is_active_agent(agent)], key=lambda item: str(item.get("name", "")).casefold())
+        lines = [f"{_label('agents').title()}: {len(agents)}"]
+        if tag_filter:
+            lines.append(f"Filter: {tag_filter}")
+        lines.append("")
+
+        if active:
+            lines.append(_presentation_section("active_agents", "Active:"))
+            shown = active[:limit]
+            for agent in shown:
+                status = _status_word(agent.get("status") or "active")
+                tags = _agent_tags(agent)
+                tag_text = f" ({', '.join(tags[:3])})" if tags else ""
+                lines.append(f"- {agent.get('name')} - {status}{tag_text}")
+            _append_more(lines, len(shown), len(active), _slash(_term("agents"), "full"))
+            lines.append("")
+
+        if idle:
+            if active:
+                lines.append(f"{_presentation_section('idle_agents', 'Idle:')} {len(idle)}")
+            else:
+                lines.append(f"{_presentation_section('idle_agents', 'Idle:')} {len(idle)}")
+                sample = idle[: min(limit, len(idle))]
+                for agent in sample:
+                    lines.append(f"- {agent.get('name')}")
+                _append_more(lines, len(sample), len(idle), _slash(_term("agents"), "full"))
+
+        lines.extend(["", _presentation_section("more", "More:")])
+        lines.append(f"- {_slash(_term('agents'), 'full')}")
+        lines.append(f"- {_slash(_term('agents'), '--tags')}")
+        return "\n".join(line for line in lines if line is not None).strip()
 
     lines = [f"# Paperclip {_label('agents')}: {company['name']}"]
     for agent in sorted(agents, key=lambda item: str(item.get("name", "")).casefold()):
@@ -609,9 +995,10 @@ def _normalize_scope(value: str) -> str:
 
 
 def _tasks_cmd(raw_args: str) -> str:
-    words, company_token = _extract_company(_parse_words(raw_args))
+    words, full = _strip_full_tokens(_parse_words(raw_args))
+    words, company_token = _extract_company(words)
     scope = "open"
-    limit = 10
+    limit = _presentation_limit("tasks", 10) or 10
 
     if words and _normalize_scope(words[0]) in {"open", "all", "todo", "in_progress", "blocked", "done", "cancelled"}:
         scope = _normalize_scope(words.pop(0))
@@ -633,7 +1020,29 @@ def _tasks_cmd(raw_args: str) -> str:
     elif scope != "all":
         issues = [item for item in issues if item.get("status") == scope]
 
-    issues.sort(key=lambda item: str(item.get("lastActivityAt") or item.get("updatedAt") or ""), reverse=True)
+    issues = _sort_issues_recent(issues)
+
+    if _human_enabled() and not full:
+        title_scope = "Open" if scope == "open" else scope.replace("_", " ").title()
+        lines = [f"{title_scope} {_label('tasks')}: {len(issues)}"]
+        if not issues:
+            lines.append("")
+            lines.append(f"No {_label('tasks')} in this view.")
+        else:
+            lines.append("")
+            shown = issues[:limit]
+            for issue in shown:
+                ident = _issue_ident(issue)
+                status = _status_word(issue.get("status") or "unknown")
+                assignee = _agent_name(agent_by_id, issue.get("assigneeAgentId"))
+                assignee_text = "" if assignee == "-" else f" - {assignee}"
+                lines.append(f"- {ident} - {status}{assignee_text} - {_line(issue.get('title'), 220)}")
+            _append_more(lines, len(shown), len(issues), _slash(_term("tasks"), scope, "full") if scope != "open" else _slash(_term("tasks"), "full"))
+        lines.extend(["", _presentation_section("more", "More:")])
+        lines.append(f"- {_slash(_term('tasks'), 'all')}")
+        lines.append(f"- {_slash(_term('tasks'), 'full')}")
+        return "\n".join(lines).strip()
+
     lines = [f"# Paperclip {_label('tasks')}: {company['name']} ({scope}, limit {limit})"]
     if not issues:
         lines.append(f"- No {_label('tasks')}.")
@@ -646,13 +1055,43 @@ def _tasks_cmd(raw_args: str) -> str:
 
 
 def _task_cmd(raw_args: str) -> str:
-    issue_ref = _issue_ref(raw_args)
+    words, full = _strip_full_tokens(_parse_words(raw_args))
+    filtered_raw = " ".join(words)
+    issue_ref = _issue_ref(filtered_raw)
     if not issue_ref:
         return f"Usage: {_slash(_term('task'), 'ISSUE')}"
     issue = _api(f"/issues/{issue_ref}")
     agents = _api(f"/companies/{issue['companyId']}/agents")
     agent_by_id = {agent["id"]: agent for agent in agents}
     comments = [item for item in _api(f"/issues/{issue['id']}/comments") if not item.get("deletedAt")]
+
+    if _human_enabled() and not full:
+        comment_limit = _presentation_limit("comments", 3)
+        comment_chars = _presentation_limit("comment_chars", 500) or 500
+        assignee = _agent_name(agent_by_id, issue.get("assigneeAgentId"))
+        lines = [
+            f"{issue.get('identifier') or _compact_id(issue.get('id'))}",
+            str(issue.get("title") or "").strip(),
+            "",
+            f"Status: {_status_word(issue.get('status') or 'unknown')}",
+            f"Priority: {issue.get('priority') or '-'}",
+            f"Assignee: {assignee}",
+            f"Parent: {_compact_id(issue.get('parentId')) if issue.get('parentId') else 'none'}",
+            "",
+            _presentation_section("recent_comments", f"Recent {_label('comments')}:"),
+        ]
+        if not comments or not comment_limit:
+            lines.append(f"- No {_label('comments')}.")
+        for comment in (comments[-comment_limit:] if comment_limit else []):
+            body = _line(comment.get("body") or "", comment_chars)
+            author = comment.get("authorType") or "unknown"
+            created = comment.get("createdAt") or ""
+            lines.append(f"- {author} {created}: {body}")
+        lines.extend(["", "Open:", _issue_url(issue), "", _presentation_section("more", "More:")])
+        lines.append(f"- {_slash(_term('task'), issue_ref, 'full')}")
+        lines.append(f"- {_slash(_term('comments'), issue_ref, 'full')}")
+        return "\n".join(lines).strip()
+
     lines = [
         f"# {issue.get('identifier') or issue.get('id')}: {issue.get('title')}",
         f"- status: {issue.get('status')}",
@@ -675,11 +1114,32 @@ def _task_cmd(raw_args: str) -> str:
 
 
 def _comments_cmd(raw_args: str) -> str:
-    issue_ref = _issue_ref(raw_args)
+    words, full = _strip_full_tokens(_parse_words(raw_args))
+    filtered_raw = " ".join(words)
+    issue_ref = _issue_ref(filtered_raw)
     if not issue_ref:
         return f"Usage: {_slash(_term('comments'), 'ISSUE')}"
     issue = _api(f"/issues/{issue_ref}")
     comments = [item for item in _api(f"/issues/{issue['id']}/comments") if not item.get("deletedAt")]
+
+    if _human_enabled() and not full:
+        comment_limit = _presentation_limit("comments", 3)
+        comment_chars = _presentation_limit("comment_chars", 500) or 500
+        lines = [
+            f"{_label('comments').title()}: {issue.get('identifier') or _compact_id(issue.get('id'))}",
+            str(issue.get("title") or "").strip(),
+            "",
+        ]
+        if not comments or not comment_limit:
+            lines.append(f"No {_label('comments')}.")
+        for comment in (comments[-comment_limit:] if comment_limit else []):
+            author = comment.get("authorType") or "unknown"
+            created = comment.get("createdAt") or ""
+            lines.append(f"- {author} {created}: {_line(comment.get('body') or '', comment_chars)}")
+        lines.extend(["", _presentation_section("more", "More:")])
+        lines.append(f"- {_slash(_term('comments'), issue_ref, 'full')}")
+        return "\n".join(lines).strip()
+
     lines = [f"# {_label('comments').title()}: {issue.get('identifier') or issue.get('id')}", issue.get("title") or ""]
     if not comments:
         lines.append(f"\nNo {_label('comments')}.")
@@ -735,6 +1195,37 @@ def _capabilities_cmd(_: str) -> str:
     return "\n".join(lines)
 
 
+def _debug_cmd(raw_args: str = "") -> str:
+    parts = [_capabilities_cmd(raw_args), "", _technical_help(raw_args)]
+    return "\n".join(parts).strip()
+
+
+def _format_error(exc: Exception) -> str:
+    message = str(exc)
+    errors = _presentation_config().get("errors", {})
+    show_details = _as_bool(errors.get("show_details") if isinstance(errors, dict) else None, False)
+    show_debug_hint = _as_bool(errors.get("show_debug_hint") if isinstance(errors, dict) else None, True)
+    if not _human_enabled() or show_details:
+        return message
+
+    lowered = message.casefold()
+    if "failed:" in lowered or "before http response" in lowered or "connection" in lowered:
+        lines = [
+            "I could not complete the Paperclip request.",
+            "",
+            "Check that the local Paperclip API is running and reachable.",
+        ]
+    else:
+        lines = [
+            "I could not complete the Paperclip request.",
+            "",
+            _line(message, 240),
+        ]
+    if show_debug_hint:
+        lines.extend(["", _presentation_section("details", "Details:"), f"- {_slash(_term('debug'))}"])
+    return "\n".join(lines).strip()
+
+
 def _run_action(name: str, action: dict[str, Any], raw_args: str) -> str:
     if action.get("disabled"):
         return f"Project action disabled: {name}"
@@ -763,12 +1254,19 @@ def _run_action(name: str, action: dict[str, Any], raw_args: str) -> str:
 
     output = result.stdout.strip()
     error = result.stderr.strip()
+    presentation = action.get("presentation")
+    action_clip = None
+    if isinstance(presentation, dict):
+        try:
+            action_clip = int(presentation.get("clip")) if presentation.get("clip") is not None else None
+        except (TypeError, ValueError):
+            action_clip = None
     if result.returncode == 0:
-        return _clip(output or "OK")
+        return _clip(output or "OK", action_clip or _presentation_limit("output_chars", 12000) or 12000)
     body = output
     if error:
         body = f"{body}\n\nstderr:\n{error}".strip()
-    return _clip(f"Project action exited with {result.returncode}.\n\n{body}")
+    return _clip(f"Project action exited with {result.returncode}.\n\n{body}", action_clip or _presentation_limit("output_chars", 12000) or 12000)
 
 
 def _router(raw_args: str) -> str:
@@ -786,6 +1284,8 @@ def _router(raw_args: str) -> str:
             return _health(tail)
         if head in _aliases("companies"):
             return _companies_cmd(tail)
+        if head in _aliases("status"):
+            return _status_cmd(tail)
         if head in _aliases("agents"):
             return _agents_cmd(tail)
         if head in _aliases("tasks"):
@@ -796,6 +1296,8 @@ def _router(raw_args: str) -> str:
             return _comments_cmd(tail)
         if head in _aliases("move"):
             return _move_cmd(tail)
+        if head in _aliases("debug"):
+            return _debug_cmd(tail)
         if head in _aliases("capabilities"):
             return _capabilities_cmd(tail)
 
@@ -803,7 +1305,7 @@ def _router(raw_args: str) -> str:
             if head in _action_aliases(name, action):
                 return _run_action(name, action, tail)
     except PaperclipError as exc:
-        return str(exc)
+        return _format_error(exc)
 
     return _help().strip()
 
@@ -1156,12 +1658,12 @@ def _pre_gateway_dispatch(event: Any, **kwargs: Any) -> dict[str, str] | None:
 
 def _safe(handler: Any, raw_args: str) -> str:
     try:
-        return _clip(handler(raw_args))
+        return _clip_output(handler(raw_args))
     except PaperclipError as exc:
-        return str(exc)
+        return _format_error(exc)
     except Exception as exc:
         logger.exception("paperclip command failed")
-        return f"Paperclip command failed: {exc}"
+        return _format_error(PaperclipError(f"Paperclip command failed: {exc}"))
 
 
 def _register_explicit_commands(ctx: Any, command: str) -> None:
@@ -1169,6 +1671,7 @@ def _register_explicit_commands(ctx: Any, command: str) -> None:
     explicit = {
         f"{prefix}-companies": (_companies_cmd, "List Paperclip companies.", ""),
         f"{prefix}-health": (_health, "Check Paperclip API health.", ""),
+        f"{prefix}-status": (_status_cmd, "Show compact Paperclip status.", "[full]"),
         f"{prefix}-agents": (_agents_cmd, "List agents in a Paperclip company.", '[--company "Company Name"]'),
         f"{prefix}-tasks": (
             _tasks_cmd,
@@ -1178,6 +1681,7 @@ def _register_explicit_commands(ctx: Any, command: str) -> None:
         f"{prefix}-task": (_task_cmd, "Show one Paperclip task/issue.", "ISSUE"),
         f"{prefix}-comments": (_comments_cmd, "Show comments for one Paperclip task/issue.", "ISSUE"),
         f"{prefix}-move": (_move_cmd, "Move a Paperclip task/issue to another status.", "ISSUE <status>"),
+        f"{prefix}-debug": (_debug_cmd, "Show Paperclip Cockpit diagnostics.", ""),
     }
     for name, (handler, description, args_hint) in explicit.items():
         ctx.register_command(name=name, handler=lambda raw, item=handler: _safe(item, raw), description=description, args_hint=args_hint)

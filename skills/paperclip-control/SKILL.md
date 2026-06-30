@@ -12,11 +12,13 @@ The command name is configurable. Use `/pc` only when no project config changes 
 
 - Use `<command> companies` to list organizations.
 - Use `<command> health` to check the Paperclip API.
+- Use `<command> status` for a compact workspace overview.
 - Use `<command> agents [--company "Name"]` to list workers/agents in a company.
 - Use `<command> tasks [--company "Name"] [open|all|todo|in_progress|blocked|done|cancelled] [limit]` to inspect work.
 - Use `<command> task ISSUE` for one issue.
 - Use `<command> comments ISSUE` for recent discussion.
 - Use `<command> capabilities` to see plugin configuration and safety mode.
+- Use `<command> debug` or append `full`/`raw` when the user needs technical detail.
 
 ## Write Commands
 
@@ -52,7 +54,7 @@ When answering the user:
 
 - Label current state from the plugin as `Paperclip API`.
 - Label your own synthesis as `Inference`.
-- Keep task/comment output compact; ask for a specific issue before dumping long history.
+- Keep task/comment output compact. The plugin defaults to human-readable summaries; use `full` only when the user asks for detail or debugging.
 - Never reveal tokens, environment variables, chat IDs, or profile secrets.
 
 ## Telegram Behavior

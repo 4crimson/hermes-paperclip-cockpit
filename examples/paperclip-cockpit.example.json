@@ -28,7 +28,9 @@
     "comments": "notes",
     "move": "move",
     "health": "health",
-    "capabilities": "capabilities"
+    "status": "overview",
+    "capabilities": "capabilities",
+    "debug": "debug"
   },
   "aliases": {
     "agents": ["members", "team", "people"],
@@ -37,6 +39,36 @@
     "comments": ["notes"]
   },
   "markers": ["paperclip", "work"],
+  "presentation": {
+    "mode": "human",
+    "home": {
+      "intro": "Connected to the project workspace in Paperclip.",
+      "items": [
+        { "action": "status", "text": "short workspace overview" },
+        { "action": "agents", "text": "show members" },
+        { "action": "tasks", "text": "show open items" }
+      ],
+      "more": [
+        { "command": "help full", "text": "technical help" },
+        { "action": "debug", "text": "diagnostics" }
+      ]
+    },
+    "limits": {
+      "agents": 12,
+      "tasks": 10,
+      "comments": 3,
+      "comment_chars": 500,
+      "runs": 0
+    },
+    "visibility": {
+      "status_runs": false,
+      "uuids": false
+    },
+    "errors": {
+      "show_details": false,
+      "show_debug_hint": true
+    }
+  },
   "actions": {
     "sample": {
       "usage": "sample ARG",
