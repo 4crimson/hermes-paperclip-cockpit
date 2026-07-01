@@ -88,6 +88,33 @@ When enabled, the plugin resets Hermes gateway sessions that Hermes marked as `r
 
 `reset_session_age_minutes` and `reset_idle_minutes` are optional stale-context guards. They reset the Hermes chat session before the LLM runs when a command-cockpit session is too old or idle too long. This keeps Telegram control surfaces from carrying stale plans or phantom background work for hours.
 
+If you prefer the old technical output by default, set:
+
+```json
+{
+  "presentation": {
+    "show_technical_by_default": true
+  }
+}
+```
+
+That makes the default `help`, `status`, `agents`, `tasks`, `task`, and `comments` views use the technical format unless the command explicitly asks for a human presentation mode.
+
+Durable Paperclip comments created by write operations are also configurable:
+
+```json
+{
+  "notifications": {
+    "comments": {
+      "move_status_changed": "Status changed via cockpit: {old_status} -> {new_status}.",
+      "auto_finalized": "Automatically finalized: all visible child issues are in terminal statuses."
+    }
+  }
+}
+```
+
+Available placeholders include `{old_status}`, `{new_status}`, `{issue_id}`, and `{issue_identifier}`.
+
 Company selection order:
 
 1. `--company "Company Name"` in a command.
@@ -222,6 +249,36 @@ Project configs can also map explicit natural-language intents to project action
 ```
 
 This keeps project words in `paperclip-cockpit.json`: the plugin only knows how to route an intent to an action. Use `require_tail` and `min_tail_chars` for actions that create work, so vague confirmations do not become empty tasks.
+
+For reusable workflow helpers, project actions can call a plugin builtin instead of a project script. The first builtin is `finalize`, which closes a parent issue tree when all visible child issues are already in terminal statuses (`done`, `blocked`, or `cancelled`):
+
+```json
+{
+  "actions": {
+    "finalize": {
+      "usage": "finalize ISSUE",
+      "builtin": "finalize",
+      "description": "close a package when all child issues are finished"
+    }
+  }
+}
+```
+
+Run it as `/pc finalize ABC-12` or `/pc finalize ABC-12 --dry-run`. Real status changes still require `PAPERCLIP_COCKPIT_ENABLE_WRITES=1`.
+
+Projects can also attach a reusable hook after `/pc move` so terminal child statuses automatically try to finalize parent packages:
+
+```json
+{
+  "hooks": {
+    "after_move": {
+      "auto_finalize_parents_on_statuses": ["done", "blocked", "cancelled"]
+    }
+  }
+}
+```
+
+With that enabled, `/pc move ABC-12 done` still updates the target issue first, then attempts the same parent-tree finalization logic and reports whether any parents were auto-finalized.
 
 Write rewrites are disabled by default. To allow phrases like `move THE-9 done`, set both:
 

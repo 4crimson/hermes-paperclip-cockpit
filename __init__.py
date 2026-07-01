@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_CONFIG_READ_WARNINGS: dict[str, str] = {}
 
 PLUGIN_NAME = "paperclip-cockpit"
 VERSION = "0.6.2"
@@ -23,6 +24,7 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 
 TASK_STATUSES = {"todo", "in_progress", "blocked", "done", "cancelled"}
 OPEN_STATUSES = {"todo", "in_progress", "blocked"}
+TERMINAL_STATUSES = {"done", "blocked", "cancelled"}
 ISSUE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,12}-\d+)\b", re.IGNORECASE)
 COMMAND_RE = re.compile(r"[^0-9a-z_]+")
 
@@ -143,6 +145,13 @@ DEFAULT_PRESENTATION = {
         "show_details": False,
         "show_debug_hint": True,
     },
+}
+
+DEFAULT_NOTIFICATIONS = {
+    "comments": {
+        "move_status_changed": "Status changed via Paperclip Cockpit: {old_status} -> {new_status}.",
+        "auto_finalized": "Automatically finalized via Paperclip Cockpit: all visible child issues are in terminal statuses.",
+    }
 }
 
 DEFAULT_HELP_TEXT = {
@@ -324,13 +333,19 @@ def _terminal_cwd() -> str:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    path_key = str(path)
     try:
         data = json.loads(path.read_text("utf-8"))
     except FileNotFoundError:
+        _CONFIG_READ_WARNINGS.pop(path_key, None)
         return {}
     except Exception as exc:
-        logger.warning("Could not read Paperclip Cockpit config %s: %s", path, exc)
+        message = str(exc)
+        if _CONFIG_READ_WARNINGS.get(path_key) != message:
+            logger.warning("Could not read Paperclip Cockpit config %s: %s", path, exc)
+            _CONFIG_READ_WARNINGS[path_key] = message
         return {}
+    _CONFIG_READ_WARNINGS.pop(path_key, None)
     return data if isinstance(data, dict) else {}
 
 
@@ -366,6 +381,8 @@ def _config() -> dict[str, Any]:
         "actions": {},
         "intents": {},
         "gateway": {},
+        "hooks": {},
+        "notifications": DEFAULT_NOTIFICATIONS,
         "presentation": DEFAULT_PRESENTATION,
     }
     for path in _config_paths():
@@ -376,6 +393,64 @@ def _config() -> dict[str, Any]:
 def _gateway_config() -> dict[str, Any]:
     config = _config().get("gateway", {})
     return config if isinstance(config, dict) else {}
+
+
+def _hooks_config() -> dict[str, Any]:
+    config = _config().get("hooks", {})
+    return config if isinstance(config, dict) else {}
+
+
+def _notifications_config() -> dict[str, Any]:
+    raw = _config().get("notifications", {})
+    return _merge_dict(DEFAULT_NOTIFICATIONS, raw if isinstance(raw, dict) else {})
+
+
+def _notification_comment_template(key: str) -> str:
+    comments = _notifications_config().get("comments", {})
+    if not isinstance(comments, dict):
+        comments = {}
+    return str(comments.get(key) or DEFAULT_NOTIFICATIONS["comments"].get(key) or "")
+
+
+class _SafeFormatDict(dict[str, Any]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _notification_text(key: str, **values: Any) -> str:
+    template = _notification_comment_template(key).strip()
+    if not template:
+        return ""
+    try:
+        return template.format_map(_SafeFormatDict({name: "" if value is None else value for name, value in values.items()})).strip()
+    except Exception:
+        logger.warning("Paperclip Cockpit could not format notification template %s", key)
+        return template
+
+
+def _post_issue_comment(issue_id: str, body: str, *, log_context: str) -> bool:
+    text = str(body or "").strip()
+    if not text:
+        return False
+    try:
+        _api(f"/issues/{issue_id}/comments", method="POST", body={"body": text})
+        return True
+    except Exception as exc:
+        logger.info("Paperclip comment failed for %s: %s", log_context, exc)
+        return False
+
+
+def _after_move_auto_finalize_statuses() -> set[str]:
+    hooks = _hooks_config()
+    after_move = hooks.get("after_move", {}) if isinstance(hooks, dict) else {}
+    if not isinstance(after_move, dict):
+        return set()
+    values = (
+        after_move.get("auto_finalize_parents_on_statuses")
+        or after_move.get("auto_finalize_statuses")
+        or after_move.get("finalize_on_statuses")
+    )
+    return {str(item).strip().casefold() for item in _listify(values) if str(item).strip()}
 
 
 def _reset_on_gateway_shutdown_enabled() -> bool:
@@ -518,6 +593,10 @@ def _human_enabled() -> bool:
     return True
 
 
+def _show_technical_by_default() -> bool:
+    return _as_bool(_presentation_config().get("show_technical_by_default"), False)
+
+
 def _presentation_section(key: str, fallback: str) -> str:
     sections = _presentation_config().get("sections", {})
     return str(sections.get(key) or fallback)
@@ -617,6 +696,19 @@ def _sort_issues_recent(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
         issues,
         key=lambda item: str(item.get("lastActivityAt") or item.get("updatedAt") or item.get("createdAt") or ""),
         reverse=True,
+    )
+
+
+def _issue_sort_key(issue: dict[str, Any]) -> tuple[Any, ...]:
+    ident = str(issue.get("identifier") or "")
+    match = re.match(r"^([A-Z][A-Z0-9]{1,12})-(\d+)$", ident, re.IGNORECASE)
+    if match:
+        return (0, match.group(1).casefold(), int(match.group(2)))
+    return (
+        1,
+        str(issue.get("createdAt") or ""),
+        str(issue.get("updatedAt") or ""),
+        str(issue.get("id") or ""),
     )
 
 
@@ -904,7 +996,7 @@ def _human_home() -> str:
 
 
 def _help(raw_args: str = "") -> str:
-    if _human_enabled() and not _is_full_request(raw_args):
+    if _human_enabled() and not _show_technical_by_default() and not _is_full_request(raw_args):
         return _human_home()
     return _technical_help(raw_args)
 
@@ -1020,7 +1112,7 @@ def _status_cmd(raw_args: str = "") -> str:
     words, company_token = _extract_company(words)
     if words and not company_token:
         company_token = " ".join(words)
-    if not _human_enabled() or full:
+    if not _human_enabled() or full or _show_technical_by_default():
         return _technical_status(company_token)
     return _human_status(company_token)
 
@@ -1049,7 +1141,7 @@ def _agents_cmd(raw_args: str) -> str:
     if tag_filter:
         agents = [agent for agent in agents if tag_filter in {tag.casefold() for tag in _agent_tags(agent)}]
 
-    if _human_enabled() and not full:
+    if _human_enabled() and not full and not _show_technical_by_default():
         limit = _presentation_limit("agents", 12) or 12
         active = sorted([agent for agent in agents if _is_active_agent(agent)], key=lambda item: str(item.get("name", "")).casefold())
         idle = sorted([agent for agent in agents if not _is_active_agent(agent)], key=lambda item: str(item.get("name", "")).casefold())
@@ -1135,7 +1227,7 @@ def _tasks_cmd(raw_args: str) -> str:
 
     issues = _sort_issues_recent(issues)
 
-    if _human_enabled() and not full:
+    if _human_enabled() and not full and not _show_technical_by_default():
         title_scope = "Open" if scope == "open" else scope.replace("_", " ").title()
         lines = [f"{title_scope} {_label('tasks')}: {len(issues)}"]
         if not issues:
@@ -1178,7 +1270,7 @@ def _task_cmd(raw_args: str) -> str:
     agent_by_id = {agent["id"]: agent for agent in agents}
     comments = [item for item in _api(f"/issues/{issue['id']}/comments") if not item.get("deletedAt")]
 
-    if _human_enabled() and not full:
+    if _human_enabled() and not full and not _show_technical_by_default():
         comment_limit = _presentation_limit("comments", 3)
         comment_chars = _presentation_limit("comment_chars", 500) or 500
         assignee = _agent_name(agent_by_id, issue.get("assigneeAgentId"))
@@ -1235,7 +1327,7 @@ def _comments_cmd(raw_args: str) -> str:
     issue = _api(f"/issues/{issue_ref}")
     comments = [item for item in _api(f"/issues/{issue['id']}/comments") if not item.get("deletedAt")]
 
-    if _human_enabled() and not full:
+    if _human_enabled() and not full and not _show_technical_by_default():
         comment_limit = _presentation_limit("comments", 3)
         comment_chars = _presentation_limit("comment_chars", 500) or 500
         lines = [
@@ -1276,16 +1368,31 @@ def _move_cmd(raw_args: str) -> str:
     if old_status == next_status:
         return f"{issue.get('identifier') or issue.get('id')} already {next_status}"
     updated = _api(f"/issues/{issue['id']}", method="PATCH", body={"status": next_status})
-    try:
-        _api(
-            f"/issues/{issue['id']}/comments",
-            method="POST",
-            body={"body": f"Status changed via Paperclip Cockpit: {old_status} -> {next_status}."},
-        )
-    except Exception as exc:
-        logger.info("Paperclip comment after move failed: %s", exc)
+    _post_issue_comment(
+        str(issue["id"]),
+        _notification_text(
+            "move_status_changed",
+            issue_id=issue.get("id"),
+            issue_identifier=issue.get("identifier"),
+            old_status=old_status,
+            new_status=next_status,
+        ),
+        log_context=f"move {issue.get('id')}",
+    )
     ident = updated.get("identifier") or issue.get("identifier") or issue.get("id")
-    return f"Moved {ident}: {old_status} -> {next_status}\nOpen: {_issue_url(issue)}"
+    lines = [f"Moved {ident}: {old_status} -> {next_status}"]
+    auto_finalize_statuses = _after_move_auto_finalize_statuses()
+    if next_status in auto_finalize_statuses:
+        finalize_result = _finalize_issue_tree(updated, dry_run=False)
+        finalized = [item for item in finalize_result["changed"] if str(item.get("id") or "") != str(updated.get("id") or "")]
+        if finalized:
+            lines.extend(["", "Auto-finalized parents:"])
+            for item in finalized:
+                lines.append(f"- {item.get('identifier') or _compact_id(item.get('id'))}: {_line(item.get('title'), 180)}")
+        elif finalize_result["open_root_children"]:
+            lines.extend(["", "Parents stay open: some sibling issues are not in terminal statuses."])
+    lines.append(f"Open: {_issue_url(issue)}")
+    return "\n".join(lines)
 
 
 def _capabilities_cmd(_: str) -> str:
@@ -1302,6 +1409,7 @@ def _capabilities_cmd(_: str) -> str:
         f"- slash_command_writes: {_writes_enabled()}",
         f"- natural_language_writes: {_nl_writes_enabled()}",
         f"- reset_on_gateway_shutdown: {_reset_on_gateway_shutdown_enabled()}",
+        f"- after_move_auto_finalize_statuses: {', '.join(sorted(_after_move_auto_finalize_statuses())) or '-'}",
         f"- explicit_commands_registered: {_env_bool('PAPERCLIP_COCKPIT_REGISTER_EXPLICIT', False)}",
         f"- project_actions: {', '.join(_actions().keys()) or '-'}",
     ]
@@ -1360,6 +1468,9 @@ def _format_error(exc: Exception) -> str:
 def _run_action(name: str, action: dict[str, Any], raw_args: str) -> str:
     if action.get("disabled"):
         return f"Project action disabled: {name}"
+    builtin = str(action.get("builtin") or action.get("paperclip_builtin") or "").strip().casefold()
+    if builtin:
+        return _run_builtin_action(name, builtin, raw_args, action)
     command = action.get("exec") or action.get("command")
     if isinstance(command, str):
         args = _parse_words(command)
@@ -1409,6 +1520,166 @@ def _run_action(name: str, action: dict[str, Any], raw_args: str) -> str:
     if error:
         body = f"{body}\n\nstderr:\n{error}".strip()
     return present(f"Project action exited with {result.returncode}.\n\n{body}")
+
+
+def _visible_children(by_parent: dict[str, list[dict[str, Any]]], issue_id: str) -> list[dict[str, Any]]:
+    children = by_parent.get(issue_id, [])
+    return sorted([child for child in children if not child.get("hiddenAt")], key=_issue_sort_key)
+
+
+def _collect_issue_tree(root: dict[str, Any], issues: list[dict[str, Any]]) -> tuple[list[tuple[dict[str, Any], int]], dict[str, list[dict[str, Any]]]]:
+    by_parent: dict[str, list[dict[str, Any]]] = {}
+    for item in issues:
+        if item.get("hiddenAt") or not item.get("parentId"):
+            continue
+        by_parent.setdefault(str(item["parentId"]), []).append(item)
+
+    items: list[tuple[dict[str, Any], int]] = []
+
+    def visit(issue: dict[str, Any], depth: int) -> None:
+        for child in _visible_children(by_parent, str(issue.get("id") or "")):
+            items.append((child, depth))
+            visit(child, depth + 1)
+
+    visit(root, 1)
+    return items, by_parent
+
+
+def _resolve_root_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    current = issue
+    seen: set[str] = set()
+    while current.get("parentId"):
+        parent_id = str(current.get("parentId") or "")
+        if not parent_id or parent_id in seen:
+            break
+        seen.add(parent_id)
+        current = _api(f"/issues/{parent_id}")
+    return current
+
+
+def _finalize_issue_tree(start_issue: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+    root = _resolve_root_issue(start_issue)
+    issues = [item for item in _api(f"/companies/{root['companyId']}/issues") if not item.get("hiddenAt")]
+    items, by_parent = _collect_issue_tree(root, issues)
+    issue_by_id = {str(root["id"]): root, **{str(issue["id"]): issue for issue, _depth in items}}
+    changed: list[dict[str, Any]] = []
+
+    for issue, depth in sorted(items, key=lambda item: (-item[1], _issue_sort_key(item[0]))):
+        children = _visible_children(by_parent, str(issue.get("id") or ""))
+        if not children or issue.get("status") in TERMINAL_STATUSES:
+            continue
+        if not all((issue_by_id.get(str(child.get("id") or ""), child).get("status") in TERMINAL_STATUSES) for child in children):
+            continue
+        if not dry_run:
+            _api(f"/issues/{issue['id']}", method="PATCH", body={"status": "done"})
+            _post_issue_comment(
+                str(issue["id"]),
+                _notification_text(
+                    "auto_finalized",
+                    issue_id=issue.get("id"),
+                    issue_identifier=issue.get("identifier"),
+                    status=issue.get("status"),
+                ),
+                log_context=f"finalize {issue.get('id')}",
+            )
+            issue["status"] = "done"
+        else:
+            issue["status"] = "done"
+        changed.append(issue)
+
+    root_children = _visible_children(by_parent, str(root.get("id") or ""))
+    open_root_children = [
+        child for child in root_children if issue_by_id.get(str(child.get("id") or ""), child).get("status") not in TERMINAL_STATUSES
+    ]
+
+    if root_children and not open_root_children and root.get("status") not in TERMINAL_STATUSES:
+        if not dry_run:
+            _api(f"/issues/{root['id']}", method="PATCH", body={"status": "done"})
+            _post_issue_comment(
+                str(root["id"]),
+                _notification_text(
+                    "auto_finalized",
+                    issue_id=root.get("id"),
+                    issue_identifier=root.get("identifier"),
+                    status=root.get("status"),
+                ),
+                log_context=f"finalize root {root.get('id')}",
+            )
+            root["status"] = "done"
+        else:
+            root["status"] = "done"
+        changed.append(root)
+
+    return {
+        "root": root,
+        "changed": changed,
+        "root_children": root_children,
+        "open_root_children": open_root_children,
+    }
+
+
+def _finalize_builtin(name: str, raw_args: str, _: dict[str, Any]) -> str:
+    words = _parse_words(raw_args)
+    dry_run = False
+    filtered: list[str] = []
+    for word in words:
+        if word in {"--dry-run", "dry-run", "dryrun"}:
+            dry_run = True
+            continue
+        filtered.append(word)
+
+    issue_ref = _issue_ref(" ".join(filtered))
+    if not issue_ref:
+        return f"Usage: {_slash(_action_usage(name, {'usage': f'{name} ISSUE [--dry-run]'}) )}"
+
+    if not dry_run and not _writes_enabled():
+        return (
+            "Paperclip writes are disabled. Set PAPERCLIP_COCKPIT_ENABLE_WRITES=1 "
+            f"to enable {_format_command(_action_usage(name, {'usage': f'{name} ISSUE'}))}."
+        )
+
+    start = _api(f"/issues/{issue_ref}")
+    finalize_result = _finalize_issue_tree(start, dry_run=dry_run)
+    root = finalize_result["root"]
+    changed = finalize_result["changed"]
+    root_children = finalize_result["root_children"]
+    open_root_children = finalize_result["open_root_children"]
+
+    lines = [
+        f"Finalize tree: {root.get('identifier') or _compact_id(root.get('id'))}",
+        str(root.get("title") or "").strip(),
+        f"- dry_run: {'yes' if dry_run else 'no'}",
+        f"- root status: {root.get('status') or 'unknown'}",
+        f"- children: {len(root_children)}",
+    ]
+    if open_root_children:
+        lines.extend(["", "Root issue stays open: some child issues are not in terminal statuses."])
+        for child in open_root_children:
+            lines.append(
+                f"- {child.get('identifier') or _compact_id(child.get('id'))} - {_status_word(child.get('status') or 'unknown')} - {_line(child.get('title'), 180)}"
+            )
+        if changed:
+            lines.append("")
+            lines.append("Finalized nested parents:")
+            for issue in changed:
+                lines.append(f"- {issue.get('identifier') or _compact_id(issue.get('id'))}")
+        return "\n".join(lines)
+
+    lines.append("")
+    if not changed:
+        lines.append("No changes: the issue tree is already finalized or does not need auto-finalization.")
+    else:
+        lines.append("Would finalize:" if dry_run else "Finalized:")
+        for issue in changed:
+            lines.append(f"- {issue.get('identifier') or _compact_id(issue.get('id'))}: {_line(issue.get('title'), 180)}")
+    lines.append(f"Open: {_issue_url(root)}")
+    return "\n".join(lines)
+
+
+def _run_builtin_action(name: str, builtin: str, raw_args: str, action: dict[str, Any]) -> str:
+    if builtin == "finalize":
+        return _finalize_builtin(name, raw_args, action)
+    return f"Unknown Paperclip Cockpit builtin action: {builtin}"
 
 
 def _router(raw_args: str) -> str:

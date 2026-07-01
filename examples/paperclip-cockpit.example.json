@@ -9,6 +9,17 @@
     "reset_session_age_minutes": 0,
     "reset_idle_minutes": 0
   },
+  "hooks": {
+    "after_move": {
+      "auto_finalize_parents_on_statuses": ["done", "blocked", "cancelled"]
+    }
+  },
+  "notifications": {
+    "comments": {
+      "move_status_changed": "Status changed via cockpit: {old_status} -> {new_status}.",
+      "auto_finalized": "Automatically finalized: all visible child issues are in terminal statuses."
+    }
+  },
   "company_hints": ["Example Workspace"],
   "labels": {
     "company": "workspace",
@@ -71,6 +82,12 @@
     }
   },
   "actions": {
+    "finalize": {
+      "usage": "finalize ISSUE",
+      "aliases": ["close-package"],
+      "description": "close a package when all child items are already finished",
+      "builtin": "finalize"
+    },
     "sample": {
       "usage": "sample ARG",
       "aliases": ["demo"],

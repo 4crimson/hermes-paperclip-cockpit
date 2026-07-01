@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import logging
 import os
 import pathlib
 import sys
@@ -56,6 +57,35 @@ class RewriteTests(unittest.TestCase):
     def test_respects_rewrite_disable(self):
         os.environ["PAPERCLIP_COCKPIT_NL_REWRITE"] = "0"
         self.assertIsNone(paperclip_cockpit._rewrite_text("покажи задачи"))
+
+    def test_malformed_config_falls_back_to_safe_defaults(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write('{"command":{"name":"broken",}')
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+
+            home = paperclip_cockpit._router("")
+            rewritten = paperclip_cockpit._rewrite_text("show paperclip companies")
+
+        self.assertIn("Connected to Paperclip.", home)
+        self.assertIn("/pc status", home)
+        self.assertEqual(rewritten, "/pc companies")
+
+    def test_malformed_config_logs_warning_only_once_per_error_state(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write('{"command":{"name":"broken",}')
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            paperclip_cockpit._CONFIG_READ_WARNINGS.clear()
+
+            with self.assertLogs(paperclip_cockpit.logger, level=logging.WARNING) as captured:
+                home = paperclip_cockpit._router("")
+                rewritten = paperclip_cockpit._rewrite_text("show paperclip companies")
+
+        self.assertIn("Connected to Paperclip.", home)
+        self.assertEqual(rewritten, "/pc companies")
+        self.assertEqual(len(captured.records), 1)
+        self.assertIn("Could not read Paperclip Cockpit config", captured.output[0])
 
     def test_custom_command_and_alias_config(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
@@ -269,6 +299,34 @@ class RewriteTests(unittest.TestCase):
         self.assertIn("Usage:", output)
         self.assertIn("Safety:", output)
 
+    def test_show_technical_by_default_uses_technical_views(self):
+        body = {"presentation": {"show_technical_by_default": True}}
+
+        def fake_api(path, **kwargs):
+            if path == "/health":
+                return {"ok": True}
+            if path == "/companies":
+                return [{"id": "c1", "name": "Example Workspace", "issuePrefix": "EX", "status": "active"}]
+            if path == "/companies/c1/agents":
+                return [{"id": "a1", "name": "Alice", "status": "active"}]
+            if path == "/companies/c1/issues":
+                return [{"id": "i1", "identifier": "EX-1", "title": "Open item", "status": "todo", "parentId": None}]
+            if path == "/companies/c1/heartbeat-runs":
+                return []
+            raise AssertionError(path)
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            paperclip_cockpit._api = fake_api
+            home = paperclip_cockpit._router("")
+            status = paperclip_cockpit._router("status")
+
+        self.assertIn("Usage:", home)
+        self.assertIn("# Paperclip status", status)
+        self.assertNotIn("Paperclip is reachable.", status)
+
     def test_custom_terms_drive_human_home(self):
         body = {
             "command": {"name": "work"},
@@ -456,6 +514,223 @@ class RewriteTests(unittest.TestCase):
         self.assertIn("Still here", output)
         self.assertNotIn("Safety:", output)
         self.assertNotIn("Company selection:", output)
+
+    def test_builtin_finalize_closes_nested_parents_and_root(self):
+        body = {
+            "actions": {
+                "finalize": {
+                    "usage": "finalize ISSUE",
+                    "builtin": "finalize",
+                }
+            }
+        }
+        calls = []
+        root = {
+            "id": "root",
+            "companyId": "c1",
+            "identifier": "EX-1",
+            "title": "Root package",
+            "status": "in_progress",
+            "parentId": None,
+        }
+        parent = {
+            "id": "child-parent",
+            "companyId": "c1",
+            "identifier": "EX-2",
+            "title": "Nested package",
+            "status": "in_progress",
+            "parentId": "root",
+        }
+        leaf = {
+            "id": "leaf",
+            "companyId": "c1",
+            "identifier": "EX-3",
+            "title": "Leaf task",
+            "status": "done",
+            "parentId": "child-parent",
+        }
+
+        def fake_api(path, method="GET", body=None, **kwargs):
+            calls.append((method, path, body))
+            if method == "GET" and path == "/issues/EX-2":
+                return dict(parent)
+            if method == "GET" and path == "/issues/root":
+                return dict(root)
+            if method == "GET" and path == "/companies/c1/issues":
+                return [dict(root), dict(parent), dict(leaf)]
+            if method == "PATCH" and path == "/issues/child-parent":
+                parent["status"] = body["status"]
+                return dict(parent)
+            if method == "PATCH" and path == "/issues/root":
+                root["status"] = body["status"]
+                return dict(root)
+            if method == "POST" and path in {"/issues/child-parent/comments", "/issues/root/comments"}:
+                return {"ok": True}
+            raise AssertionError((method, path, body))
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            os.environ["PAPERCLIP_COCKPIT_ENABLE_WRITES"] = "1"
+            self.addCleanup(os.environ.pop, "PAPERCLIP_COCKPIT_ENABLE_WRITES", None)
+            paperclip_cockpit._api = fake_api
+            output = paperclip_cockpit._router("finalize EX-2")
+
+        self.assertIn("Finalize tree: EX-1", output)
+        self.assertIn("Finalized:", output)
+        self.assertIn("EX-2: Nested package", output)
+        self.assertIn("EX-1: Root package", output)
+        self.assertEqual(parent["status"], "done")
+        self.assertEqual(root["status"], "done")
+        self.assertIn(("PATCH", "/issues/child-parent", {"status": "done"}), calls)
+        self.assertIn(("PATCH", "/issues/root", {"status": "done"}), calls)
+
+    def test_move_can_auto_finalize_parents_via_hook_config(self):
+        body = {
+            "hooks": {
+                "after_move": {
+                    "auto_finalize_parents_on_statuses": ["done", "blocked", "cancelled"]
+                }
+            }
+        }
+        root = {
+            "id": "root",
+            "companyId": "c1",
+            "identifier": "EX-1",
+            "title": "Root package",
+            "status": "in_progress",
+            "parentId": None,
+        }
+        parent = {
+            "id": "parent",
+            "companyId": "c1",
+            "identifier": "EX-2",
+            "title": "Parent package",
+            "status": "in_progress",
+            "parentId": "root",
+        }
+        leaf = {
+            "id": "leaf",
+            "companyId": "c1",
+            "identifier": "EX-3",
+            "title": "Leaf task",
+            "status": "in_progress",
+            "parentId": "parent",
+        }
+
+        def fake_api(path, method="GET", body=None, **kwargs):
+            if method == "GET" and path == "/issues/EX-3":
+                return dict(leaf)
+            if method == "GET" and path == "/issues/parent":
+                return dict(parent)
+            if method == "GET" and path == "/issues/root":
+                return dict(root)
+            if method == "GET" and path == "/companies/c1/issues":
+                return [dict(root), dict(parent), dict(leaf)]
+            if method == "PATCH" and path == "/issues/leaf":
+                leaf["status"] = body["status"]
+                return dict(leaf)
+            if method == "PATCH" and path == "/issues/parent":
+                parent["status"] = body["status"]
+                return dict(parent)
+            if method == "PATCH" and path == "/issues/root":
+                root["status"] = body["status"]
+                return dict(root)
+            if method == "POST" and path in {"/issues/leaf/comments", "/issues/parent/comments", "/issues/root/comments"}:
+                return {"ok": True}
+            raise AssertionError((method, path, body))
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            os.environ["PAPERCLIP_COCKPIT_ENABLE_WRITES"] = "1"
+            self.addCleanup(os.environ.pop, "PAPERCLIP_COCKPIT_ENABLE_WRITES", None)
+            paperclip_cockpit._api = fake_api
+            output = paperclip_cockpit._router("move EX-3 done")
+
+        self.assertIn("Moved EX-3: in_progress -> done", output)
+        self.assertIn("Auto-finalized parents:", output)
+        self.assertIn("EX-2: Parent package", output)
+        self.assertIn("EX-1: Root package", output)
+        self.assertEqual(parent["status"], "done")
+        self.assertEqual(root["status"], "done")
+
+    def test_notification_templates_can_be_overridden(self):
+        body = {
+            "hooks": {
+                "after_move": {
+                    "auto_finalize_parents_on_statuses": ["done"]
+                }
+            },
+            "notifications": {
+                "comments": {
+                    "move_status_changed": "Изменение статуса: {old_status} -> {new_status}.",
+                    "auto_finalized": "Автозакрытие через cockpit: все дочерние задачи уже в финальных статусах."
+                }
+            }
+        }
+        posted = []
+        root = {
+            "id": "root",
+            "companyId": "c1",
+            "identifier": "EX-1",
+            "title": "Root package",
+            "status": "in_progress",
+            "parentId": None,
+        }
+        parent = {
+            "id": "parent",
+            "companyId": "c1",
+            "identifier": "EX-2",
+            "title": "Parent package",
+            "status": "in_progress",
+            "parentId": "root",
+        }
+        leaf = {
+            "id": "leaf",
+            "companyId": "c1",
+            "identifier": "EX-3",
+            "title": "Leaf task",
+            "status": "in_progress",
+            "parentId": "parent",
+        }
+
+        def fake_api(path, method="GET", body=None, **kwargs):
+            if method == "GET" and path == "/issues/EX-3":
+                return dict(leaf)
+            if method == "GET" and path == "/issues/parent":
+                return dict(parent)
+            if method == "GET" and path == "/issues/root":
+                return dict(root)
+            if method == "GET" and path == "/companies/c1/issues":
+                return [dict(root), dict(parent), dict(leaf)]
+            if method == "PATCH" and path == "/issues/leaf":
+                leaf["status"] = body["status"]
+                return dict(leaf)
+            if method == "PATCH" and path == "/issues/parent":
+                parent["status"] = body["status"]
+                return dict(parent)
+            if method == "PATCH" and path == "/issues/root":
+                root["status"] = body["status"]
+                return dict(root)
+            if method == "POST" and path.endswith("/comments"):
+                posted.append(body["body"])
+                return {"ok": True}
+            raise AssertionError((method, path, body))
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json") as config:
+            config.write(json.dumps(body))
+            config.flush()
+            os.environ["PAPERCLIP_COCKPIT_CONFIG"] = config.name
+            os.environ["PAPERCLIP_COCKPIT_ENABLE_WRITES"] = "1"
+            self.addCleanup(os.environ.pop, "PAPERCLIP_COCKPIT_ENABLE_WRITES", None)
+            paperclip_cockpit._api = fake_api
+            paperclip_cockpit._move_cmd("EX-3 done")
+
+        self.assertIn("Изменение статуса: in_progress -> done.", posted)
+        self.assertIn("Автозакрытие через cockpit: все дочерние задачи уже в финальных статусах.", posted)
 
     def test_human_task_card_and_full_comments(self):
         comments = [

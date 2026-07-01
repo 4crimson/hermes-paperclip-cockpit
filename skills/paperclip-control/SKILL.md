@@ -24,6 +24,8 @@ The command name is configurable. Use `/pc` only when no project config changes 
 
 Only use `<command> move ISSUE STATUS` when the user explicitly asks to change Paperclip state. Do not infer a write from vague discussion.
 
+If the project config exposes a `finalize` action, use `<command> finalize ISSUE` when the user explicitly asks to close a parent package/tree after child work is done. Treat it as a real write operation with the same caution as `move`.
+
 Valid statuses:
 
 - `todo`
@@ -34,9 +36,13 @@ Valid statuses:
 
 The plugin may reject writes unless `PAPERCLIP_COCKPIT_ENABLE_WRITES=1` is set.
 
+Some projects also enable `hooks.after_move.auto_finalize_parents_on_statuses`. In that case, a successful `<command> move ISSUE done|blocked|cancelled` may auto-finalize parent issues and leave durable Paperclip comments. Report only what the command actually returned.
+
 ## Project Actions
 
 Project configs may define extra actions such as `research`, `prepare`, `brief`, or `run`. If the user asks to start/create/run project work and the config exposes a matching command, use that command instead of improvising with local files or code.
+
+Project configs may also expose builtin actions through the same action registry. These are still deterministic plugin commands, not free-form model behavior.
 
 When the user confirms a previously discussed plan, reuse the concrete entities from the visible conversation and call the configured project action with an explicit argument list. If the confirmation is too vague to identify the work, ask one short clarification.
 
